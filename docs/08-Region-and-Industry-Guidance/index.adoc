@@ -1,0 +1,25 @@
+[#region-industry-guidance]
+= Region and Industry Guidance
+:toc: left
+:toclevels: 3
+
+[.lead]
+== Overview
+
+The LZA Universal Configuration provides a baseline foundation that serves organizations worldwide. While the core configuration incorporates security best practices and Well-Architected principles applicable across all industries, specific regions and industries often have unique regulatory, compliance, and operational requirements.
+
+This section provides specialized guidance developed in coordination with AWS teams representing customers from different regions and industries. Each guide builds upon the Universal Configuration baseline with targeted enhancements to help you meet your specific requirements faster.
+
+Review the guidance for your region or industry before deployment to understand specific considerations, configuration requirements, and compliance mappings that apply to your environment.
+
+== Supported Regions and Industries
+
+=== US Federal
+
+For US government agencies, contractors, and organizations handling sensitive federal workloads. Covers AWS GovCloud (US) deployment, federal compliance frameworks, and enhanced security controls.
+
+link:us-federal/index.adoc[View US Federal Guidance →]
+
+'''
+
+link:../index.adoc[Back to Documentation Home]

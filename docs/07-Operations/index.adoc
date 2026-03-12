@@ -1,0 +1,172 @@
+= Operations
+
+This section outlines day-to-day operation of the LZA with Universal Configuration as well as methods for addressing common concerns and extending LZA with additional capabilities. Refer to the link:https://docs.aws.amazon.com/solutions/latest/landing-zone-accelerator-on-aws/use-the-solution.html[Use the solution] section of the Landing Zone Accelerator on AWS documentation for further guidance on working with LZA.
+
+== Managing LZA After Initial Deployment
+
+=== Overview of LZA Operations
+
+After successfully deploying Landing Zone Accelerator on AWS (LZA), ongoing management and operations become critical to maintaining a secure, compliant, and well-governed AWS environment. LZA is designed as a code-based solution that uses configuration files to define and manage AWS resources across your entire organization. This approach provides significant advantages for consistency, repeatability, and auditability.
+
+=== Configuration Management Best Practices
+
+==== Code-First Approach
+
+*Always manage LZA-controlled resources through configuration files, not the AWS console*:
+
+* *Prevent Configuration Drift*: Changes made directly in the AWS console will be overwritten during the next LZA pipeline run, leading to inconsistencies and potential disruption.
+* *Maintain Single Source of Truth*: Your LZA configuration files should serve as the definitive record of your intended AWS environment state.
+* *Enable Auditability*: All changes made through configuration updates are tracked in version control, providing a comprehensive audit trail.
+
+==== Iterative Change Process
+
+Implement a structured process for making changes to your LZA environment:
+
+1. *Small, Focused Changes*: Make incremental modifications rather than large-scale updates.
+2. *Thorough Testing*: Test changes in development or test environments before deploying to production.
+3. *Code Reviews*: Require peer reviews of all configuration changes.
+4. *Security Reviews*: Include security team assessment for changes that impact security posture.
+5. *Change Control*: Follow formal change management procedures, including:
+   * Documented approval process
+   * Scheduled change windows
+   * Rollback plans
+   * Post-implementation verification
+
+==== Documentation and Knowledge Management
+
+* *Update Documentation*: Maintain current documentation that reflects your LZA configuration.
+* *Create Runbooks*: Develop operational runbooks for common tasks and troubleshooting.
+* *Automation*: Consider using SSM Automation Documents to automate routine operations.
+* *Knowledge Transfer*: Ensure multiple team members understand LZA operation and configuration.
+
+=== Change Implementation Framework
+
+==== Step 1: Requirements and Planning
+
+* Clearly define the business or technical requirement driving the change
+* Identify which configuration files need modification
+* Assess potential impacts across the environment
+* Document the proposed changes and expected outcomes
+
+==== Step 2: Development and Testing
+
+* Create a feature branch in your version control system
+* Make the necessary configuration changes
+* Validate configurations using `yarn validate-config`
+* Deploy to a test environment if available
+* Perform thorough testing to verify expected behavior
+
+==== Step 3: Review and Approval
+
+* Submit a pull request for peer review
+* Address any feedback or concerns raised during review
+* Obtain security team approval for security-impacting changes
+* Follow your organization's change management process for final approval
+
+==== Step 4: Implementation
+
+* Merge approved changes to the main branch
+* Monitor the LZA pipeline execution
+* Verify successful deployment
+* Validate that the changes are functioning as expected
+
+==== Step 5: Documentation and Knowledge Sharing
+
+* Update relevant documentation
+* Create or update operational runbooks as needed
+* Communicate changes to stakeholders
+* Conduct knowledge sharing sessions if necessary
+
+=== Monitoring and Compliance
+
+* *Pipeline Execution*: Monitor LZA pipeline runs for failures or warnings
+* *Drift Detection*: Implement mechanisms to detect configuration drift
+* *Compliance Validation*: Regularly validate that your environment meets compliance requirements
+* *Security Posture*: Continuously assess your security posture through Security Hub and other tools
+
+=== Automation with SSM Runbooks
+
+AWS Systems Manager (SSM) Runbooks can be leveraged to automate common operational tasks and documentation:
+
+* *Documentation Generation*: Create runbooks that collect and document current state
+* *Operational Procedures*: Automate routine operational tasks
+* *Compliance Checks*: Validate configuration against compliance requirements
+* *Troubleshooting*: Streamline investigation of common issues
+
+Example use cases for SSM automation:
+
+* Generating inventory reports of accounts and resources
+* Creating documentation of network configurations
+* Validating security controls across accounts
+* Automating the collection of logs for troubleshooting
+
+[IMPORTANT]
+====
+When creating automation runbooks, ensure they are deployed through your LZA configuration to maintain consistency across your environment.
+====
+
+== Available Operation Guides
+
+This section contains detailed guides for common operational tasks with LZA:
+
+=== link:./07-01-Adding-OUs.adoc[07-01-Adding-OUs]
+Step-by-step instructions for adding new Organizational Units to your AWS Organization through LZA configuration. This guide covers planning your OU structure, updating configuration files, and managing deploymentTargets.
+
+=== link:./07-02-Adding-Accounts.adoc[07-02-Adding-Accounts]
+Comprehensive guide to provisioning and managing AWS accounts within your organization using LZA. Includes best practices for account naming, email address management, and ensuring proper bootstrapping.
+
+=== link:./07-03-Managing-EC2-Instances.adoc[07-03-Managing-EC2-Instances]
+Detailed instructions for standardizing EC2 instance management across your organization, including Session Manager configuration, IAM role setup, and automation with SSM Runbooks.
+
+=== link:./07-04-Log-Analysis.adoc[07-04-Log-Analysis]
+Guide for configuring and analyzing logs across your AWS organization using LZA. Covers centralized logging, log retention policies, and integration with security monitoring tools.
+
+=== link:./07-05-Creating-Managing-Alarms.adoc[07-05-Creating-Managing-Alarms]
+Instructions for implementing consistent alarming across your AWS environment. Includes configuration of CloudWatch alarms, notification targets, and integration with incident management systems.
+
+=== link:./07-06-Managing-SCPs.adoc[07-06-Managing-SCPs]
+Comprehensive guide to implementing Service Control Policies (SCPs) through LZA. Covers SCP best practices, testing strategies, and example policies for common security requirements.
+
+=== link:./07-06-Control-Tower-Regional-Deny.adoc[07-06-Control-Tower-Regional-Deny]
+Specific guidance for implementing regional restrictions in AWS Control Tower environments using SCPs and LZA configuration.
+
+=== link:./07-08-Integrating-Active-Directory.adoc[07-08-Integrating-Active-Directory]
+Comprehensive guide to integrating Microsoft Active Directory with LZA. Covers AWS Managed Microsoft AD implementation, manual AD Connector deployment, and IAM Identity Center integration options.
+
+=== link:./07-09-Integrating-Third-Party-Solutions.adoc[07-09-Integrating-Third-Party-Solutions]
+Instructions for integrating third-party solutions with LZA using CloudFormation stacks and StackSets. Includes common integration patterns for monitoring and security tools across your AWS organization.
+
+[IMPORTANT]
+====
+Before making any changes to your LZA configuration, thoroughly review the relevant operation guide to understand the full impact of your changes and follow best practices specific to that area.
+====
+
+== Additional Documentation Requirements
+
+Organizations should supplement these guides with additional documentation specific to their environment:
+
+* *Organizational Policies*: Document specific policies and standards for your organization
+* *Custom Runbooks*: Create detailed runbooks for operations specific to your implementation
+* *Environment Documentation*: Maintain documentation of your specific environment configuration
+* *Emergency Procedures*: Document procedures for handling emergencies or security incidents
+
+Consider using SSM Automation Documents to help generate and maintain this documentation:
+
+[yaml]
+----
+# Example SSM Document to generate environment documentation
+schemaVersion: '0.3'
+description: Generate documentation of current LZA environment
+mainSteps:
+  - name: GatherOrganizationStructure
+    action: aws:executeAwsApi
+    inputs:
+      Service: organizations
+      Api: ListOrganizationalUnitsForParent
+      ParentId: "{{RootId}}"
+    # Additional steps to gather and format documentation
+----
+
+== Adding a VPC and VPC Templates
+
+== Configuring Backup copies to a secondary account and region for disaster recovery

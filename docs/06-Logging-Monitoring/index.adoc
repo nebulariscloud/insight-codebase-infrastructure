@@ -1,0 +1,268 @@
+[#top]
+
+:toc: left
+:toclevels: 3
+:doctype: book
+:icons: font
+:iconfont-remote!:
+:iconfont-name: icons
+
+= Logging and Monitoring
+
+Managing logs and monitoring capabilities in a multi-account, multi-region AWS environment presents significant challenges that the Landing Zone Accelerator (LZA) Universal Configuration addresses through comprehensive centralization and standardization. AWS CloudWatch Logs is a regional service where logs are isolated in each AWS account and region, creating potential barriers to effective monitoring, troubleshooting, and security analysis at scale.
+
+The LZA Universal Configuration establishes a robust logging framework that centralizes logs from disparate sources into the LogArchive account, providing a single source of truth for operational data. This centralization is crucial for several key reasons:
+
+* *Security Analysis*: Security teams can efficiently monitor for threats across the entire organization without having to access individual accounts and regions
+* *Operational Troubleshooting*: When incidents occur, operations teams can quickly correlate events across accounts and regions to identify root causes
+* *Regulatory Compliance*: Centralized logging creates an immutable audit trail that satisfies regulatory requirements and streamlines audit processes
+* *Cost Optimization*: Log data can be managed with appropriate lifecycle policies to balance retention needs with storage costs
+
+The Universal Configuration establishes distinct S3 buckets in the LogArchive account for different types of logs:
+
+* *CloudWatch Logs Replication Bucket*: Stores all replicated CloudWatch Log Groups from across the organization
+* *Access Logs Bucket*: Centralizes access logs from various AWS services
+* *ELB Logs Bucket*: Specifically designed for storing Elastic Load Balancer logs
+
+By implementing this centralized approach, organizations can scale their AWS operations teams more effectively, reduce the effort needed to monitor complex environments, and maintain comprehensive visibility across their entire cloud footprint.
+
+== AWS Services Logging
+
+The majority of AWS services generate logs in Amazon CloudWatch Logs, providing detailed information about service operations, API calls, and resource states. In a multi-account, multi-region environment, these logs are scattered across multiple CloudWatch Log Groups, making comprehensive analysis challenging.
+
+The LZA Universal Configuration automatically replicates these logs to the central S3 bucket in the LogArchive account using subscription filters. This replication follows a structured approach using dynamic partitioning to organize logs by their source and type.
+
+=== Dynamic Log Partitioning
+
+The Universal Configuration implements custom prefixes for logs from specific AWS sources through dynamic partitioning, as defined in the `log-filters.json` file. This partitioning creates a logical structure in the centralized S3 bucket that makes it easier to locate and analyze specific log types:
+
+[cols="2,3", options="header"]
+|===
+|Log Group Pattern |S3 Prefix
+|/AWSAccelerator-SecurityHub |security-hub
+|AWSAccelerator-sessionmanager-logs |session-manager
+|AWSAccelerator-*FirewallAlertLogGroup* |network-firewall/alert
+|AWSAccelerator-*FirewallFlowLogGroup* |network-firewall/flow
+|AWSAccelerator-*FlowLogsGroup* |vpc-flow-logs
+|/aws/lambda/* |lambda
+|/aws/codebuild/* |codebuild
+|StackSet-AWSControlTowerBP* |AWSControlTowerBP
+|===
+
+This structured approach offers several benefits:
+
+1. *Organized Data Storage*: Logical grouping makes finding and analyzing specific log types more efficient
+2. *Optimized Query Performance*: Well-organized data structures improve performance for analytics tools
+3. *Cost Management*: Targeted queries on structured data can reduce scanning costs
+4. *Automated Processing*: Consistent prefixing enables automated processing workflows
+
+=== Log Exclusion Options
+
+While the Universal Configuration replicates all CloudWatch Log Groups by default, organizations can customize this behavior by excluding specific logs based on AWS account, organizational unit, or region. This capability is particularly useful for:
+
+* Excluding sensitive data that shouldn't be replicated
+* Reducing costs by not centralizing low-value logs
+* Managing sandbox environments separately from production monitoring
+
+The exclusion configuration provides granular control over what data is centralized, enabling organizations to balance security requirements with cost optimization. For detailed exclusion options, refer to the https://awslabs.github.io/landing-zone-accelerator-on-aws/latest/typedocs/interface/_packagesaws_accelerator_config_lib_models_global_config.ICloudWatchLogsConfig.html#exclusions[LZA CloudWatch Logs Configuration documentation].
+
+
+
+== Application Logging
+
+Applications and workloads running in AWS generate valuable operational data that provides insights into performance, user behavior, and potential issues. The LZA Universal Configuration ensures this data is properly captured and centralized through CloudWatch Logs.
+
+=== CloudWatch Logs Integration for Compute Services
+
+AWS provides multiple mechanisms for sending application logs to CloudWatch Logs from various compute services:
+
+* *Amazon EC2*: The CloudWatch Logs agent can be installed on EC2 instances to forward application, system, and custom logs
+* *Amazon ECS*: Container logs can be configured to stream directly to CloudWatch Logs
+* *Amazon EKS*: Kubernetes cluster logs can be captured using Fluent Bit or other logging solutions
+* *AWS Lambda*: Function logs are automatically sent to CloudWatch Logs
+* *AWS Fargate*: Container logs are automatically forwarded to CloudWatch Logs
+
+Once these logs reach CloudWatch Logs, they are automatically replicated to the centralized S3 bucket in the LogArchive account based on the configuration settings. This ensures that application logs from across the organization are available in one location for analysis and retention.
+
+=== Customizing Application Log Handling
+
+Organizations should review their application logging strategy to determine whether additional partitioning and prefixing are needed for replicated logs. Considerations include:
+
+1. *Log Volume*: High-volume applications may benefit from dedicated prefixes for more efficient querying
+2. *Data Sensitivity*: Particularly sensitive application data might require special handling or exclusion
+3. *Retention Requirements*: Different applications may have different log retention needs
+4. *Query Patterns*: Understanding how logs will be queried can inform optimal partitioning strategies
+
+By thoughtfully designing your application logging strategy to work with the LZA Universal Configuration's centralization capabilities, you can create a comprehensive view of application behavior across your entire AWS environment.
+
+== Security Logging
+
+Security-related logs provide critical visibility into the security posture of your AWS environment and are essential for threat detection, incident response, and compliance. The LZA Universal Configuration establishes robust security logging practices across the organization.
+
+=== AWS CloudTrail
+
+CloudTrail records AWS API calls and related events made by or on behalf of your AWS accounts, providing a complete audit trail of actions taken in your environment. In a Control Tower-based environment like the one established by the LZA Universal Configuration, the organization-level CloudTrail trail is managed by Control Tower itself.
+
+As noted in the `global-config.yaml` file:
+
+[yaml]
+----
+# In Control Tower based environment, the organization-level CloudTrail trail is managed by Control Tower
+# LZA CloudTrail settings are disabled to avoid duplication
+cloudtrail:
+  enable: false
+  organizationTrail: false
+----
+
+This configuration aligns with the Control Tower settings defined in the same file:
+
+[yaml]
+----
+controlTower:
+  enable: true
+  landingZone:
+    logging:
+      organizationTrail: true
+----
+
+By leveraging Control Tower's organization trail capabilities, the Universal Configuration ensures comprehensive API logging across all accounts in the organization without creating duplicate trails. This approach provides efficient, centralized security logging while optimizing cost.
+
+=== AWS Systems Manager Session Manager Logging
+
+AWS Systems Manager Session Manager provides secure shell access to EC2 instances without the need for opening inbound ports, managing SSH keys, or using bastion hosts. The LZA Universal Configuration automatically attaches a role to each new EC2 instance that provides permissions to connect via Session Manager, enhancing security and simplifying access management.
+
+Session Manager offers several security benefits:
+
+1. *Centralized Access Control*: No need to distribute and manage SSH keys, reducing the risk of unauthorized access
+2. *Enhanced Audit Trail*: All session activity is logged, including who accessed which instance and what commands were executed
+3. *Network Security*: No inbound ports need to be opened for shell access
+4. *Integration with IAM*: Access can be controlled through fine-grained IAM policies
+
+The Universal Configuration enables comprehensive logging for Session Manager sessions:
+
+[yaml]
+----
+sessionManager:
+  sendToCloudWatchLogs: true
+  sendToS3: false
+  attachPolicyToIamRoles:
+    - EC2-Default-SSM-Role
+----
+
+Session logs are sent to CloudWatch Logs in each account region and are then automatically replicated to the central S3 bucket through the CloudWatch Logs replication mechanism. While Session Manager can directly log to S3, this option is disabled to avoid duplication since log groups are already being replicated.
+
+It's worth noting that Session Manager has some limitations, particularly for Windows GUI sessions, which require additional configuration through Fleet Manager for full graphical access.
+
+== Network Logging
+
+Network logs provide critical visibility into traffic flows, security events, and connectivity patterns across your AWS environment. The LZA Universal Configuration implements comprehensive network logging to ensure this data is captured and centralized appropriately.
+
+=== VPC Flow Logs
+
+VPC Flow Logs capture information about IP traffic going to and from network interfaces within an AWS VPC. The Universal Configuration enables flow logging for all VPCs with the following settings as defined in the `network-config.yaml` file:
+
+[yaml]
+----
+vpcFlowLogs:
+  trafficType: ALL
+  maxAggregationInterval: 600
+  destinations:
+    - cloud-watch-logs
+  destinationsConfig:
+    cloudWatchLogs:
+      retentionInDays: 30
+  defaultFormat: false
+  customFields:
+    - version
+    - account-id
+    - interface-id
+    # Additional fields included...
+----
+
+Key aspects of this configuration include:
+
+* *Comprehensive Traffic Capture*: The `ALL` traffic type ensures both accepted and rejected traffic is logged
+* *Custom Fields*: An extended field set provides detailed information beyond the basic flow log format
+* *CloudWatch Logs Destination*: Logs are sent to CloudWatch Logs and automatically forwarded to the centralized S3 bucket
+* *Retention Period*: A 30-day retention period is set for the CloudWatch Log Groups
+
+These VPC Flow Logs provide essential data for security analysis, network troubleshooting, and compliance requirements. Once in CloudWatch Logs, they are automatically forwarded to the centralized S3 bucket in the LogArchive account based on the CloudWatch Logs group replication configuration.
+
+=== Network Firewall Logs
+
+The AWS Network Firewall deployed by the LZA Universal Configuration generates two types of logs:
+
+1. *Alert Logs*: Record information about traffic that matches the stateful rules configured with the alert action
+2. *Flow Logs*: Record information about the traffic flow that passes through the firewall
+
+Both log types are configured to send to CloudWatch Logs:
+
+[yaml]
+----
+loggingConfiguration:
+  - destination: cloud-watch-logs
+    type: ALERT
+  - destination: cloud-watch-logs
+    type: FLOW
+----
+
+These logs are then automatically forwarded to the centralized S3 bucket through the CloudWatch Logs replication mechanism, with specific prefixes applied based on the dynamic partitioning configuration:
+
+* Network Firewall Alert Logs: `network-firewall/alert`
+* Network Firewall Flow Logs: `network-firewall/flow`
+
+=== Load Balancer and Access Logs
+
+The Universal Configuration also establishes S3 buckets for storing Elastic Load Balancer logs and general access logs in the LogArchive account. These buckets include lifecycle rules to manage the data effectively:
+
+[yaml]
+----
+accessLogBucket:
+  lifecycleRules:
+    - enabled: true
+      abortIncompleteMultipartUpload: 7
+      expiration: 1000
+      noncurrentVersionExpiration: 1000
+      transitions:
+        - storageClass: GLACIER_IR
+          transitionAfter: 365
+----
+
+The lifecycle rules ensure cost-effective storage by:
+
+1. *Transitioning logs to Glacier Instant Retrieval*: After 365 days, logs are moved to a lower-cost storage tier
+2. *Setting appropriate expiration periods*: 1000-day retention for compliance and historical analysis
+3. *Cleaning up incomplete uploads*: Incomplete multipart uploads are deleted after 7 days
+
+This approach balances the need for log retention with cost optimization.
+
+== Metrics and Alarming
+
+While logs provide detailed information about specific events, metrics offer aggregated data points that help monitor the health and performance of your AWS environment. AWS CloudWatch Metrics is a regional service that collects and tracks metrics for AWS resources within each account and region.
+
+=== CloudWatch Metrics
+
+Most AWS services automatically create metrics in the AWS account and AWS region where they're provisioned. These metrics provide valuable data points for monitoring system health, performance, security, and usage patterns. CloudWatch metrics can be used for:
+
+* *Performance Analysis*: Track key performance indicators like latency, throughput, and error rates
+* *Resource Utilization*: Monitor CPU, memory, disk, and network usage across your environment
+* *Availability Monitoring*: Ensure critical services meet availability targets
+* *Security Monitoring*: Identify unusual patterns that might indicate security issues
+* *Cost Optimization*: Monitor usage patterns to identify optimization opportunities
+
+Organizations can leverage these metrics through CloudWatch Dashboards to create visual representations of their environment's health and performance.
+
+=== CloudWatch Alarms
+
+CloudWatch Alarms monitor metrics and trigger actions when metrics breach defined thresholds. The LZA solution enables organizations to create consistent alarm configurations across multiple regions and accounts, streamlining the monitoring process.
+
+While the LZA Universal Configuration does not define any specific additional metrics or alarms by default, it provides the framework for organizations to implement standardized monitoring across their environment by:
+
+1. *Creating CloudWatch Log Metric Filters at scale*: These filters extract metric values from log data
+2. *Deploying consistent alarms across regions and accounts*: Ensuring uniform monitoring
+3. *Integrating with SNS topics for notifications*: Enabling immediate alerts when issues arise
+
+Organizations can extend the Universal Configuration to create a comprehensive monitoring and alerting solution that provides visibility across the entire AWS environment. The security-config.yaml file contains the CloudWatch configuration objects that can be customized to add metric filters and alarms as needed.
+
+By combining centralized logging with strategic metrics and alarms, organizations can create a comprehensive monitoring solution that enables proactive management of their AWS environment.
+

@@ -1,0 +1,137 @@
+
+= Getting Started
+
+The link:https://github.com/aws/lza-universal-configuration[LZA Universal Config (UC)] solution expands upon the default deployment of the link:https://docs.aws.amazon.com/solutions/latest/landing-zone-accelerator-on-aws/prerequisites.html[Landing Zone Accelerator on AWS] (LZA) solution while enabling and configuring certain AWS features. This document will help you deploy and start using LZA with UC in place.
+
+== Prerequisites
+
+Review the link:https://docs.aws.amazon.com/solutions/latest/landing-zone-accelerator-on-aws/prerequisites.html#for-aws-control-tower-based-installation[Landing Zone Accelerator on AWS] solution prerequisites.
+
+LZA Universal Configuration is configured to use Control Tower by default. When you deploy LZA, it can set up Control Tower for you. For the best experience, start with a new AWS organization without Control Tower already configured.
+
+
+== Configure and Launch LZA Universal Configuration
+
+This section guides you through the complete deployment process for Landing Zone Accelerator with Universal Configuration.
+
+The main objectives are to:
+
+* Deploy LZA using the official solution page
+* Apply LZA Universal Configuration to enhance your AWS environment
+
+This process involves two key phases: first deploying the base LZA solution, then applying the Universal Configuration to add enhanced security controls, compliance frameworks, and operational best practices to your AWS environment.
+
+==== Deploy LZA
+
+1. Deploy link:https://docs.aws.amazon.com/solutions/latest/landing-zone-accelerator-on-aws/deploy-the-solution.html[LZA]
+2. Await initial environment deployment
+
+After completion of the preceding steps, your environment is ready to customize.
+
+=== Apply LZA Universal Configuration
+
+==== Download and Extract Configuration Files
+
+1. Download the appropriate zip file from the latest link:https://github.com/aws/lza-universal-configuration/releases[release]
+2. Unzip the configuration files
+3. This folder contains config and docs directories. The config directory contains the reference architecture that you want to deploy.
+
+==== Prepare Configuration Files
+
+1. Download your local configuration files based on your source link:https://docs.aws.amazon.com/solutions/latest/landing-zone-accelerator-on-aws/step-3.-update-the-configuration-files.html[Configuration Repository Location]
+2. Copy the contents from the config folder downloaded from `LZA Universal Configuration` to your local config downloaded from `Configuration Repository Location`. You may be prompted to overwrite duplicate configs, such as `accounts-config.yaml`.
+
+==== Mandatory Configuration Files
+
+You need to update and verify the following key configuration files:
+
+===== accounts-config.yaml
+
+Verify and update email addresses specific to your environment:
+
+[source,yaml]
+----
+mandatoryAccounts:
+  # We recommend you do not change mandatory account names. These are used within Landing Zone Accelerator to reference the accounts from other config files.
+  # The "name" value does not currently support spaces
+  # The "name" value DOES NOT need to match the account name
+  - name: Management
+    description: >-
+      The management (primary) account. Do not change the name field for this
+      mandatory account. Note, the account name key does not need to match the
+      AWS account name.
+    email: <management>@example.com  # <----- UPDATE EMAIL ADDRESS
+    organizationalUnit: Root
+  - name: LogArchive
+    description: >-
+      The log archive account. Do not change the name field for this mandatory
+      account. Note, the account name key does not need to match the AWS account
+      name.
+    email: <log-archive>@example.com  # <----- UPDATE EMAIL ADDRESS
+    organizationalUnit: Security
+  - name: Audit
+    description: >-
+      The security audit account (also referred to as the audit account). Do not
+      change the name field for this mandatory account. Note, the account name
+      key does not need to match the AWS account name.
+    email: <audit>@example.com  # <----- UPDATE EMAIL ADDRESS
+    organizationalUnit: Security
+workloadAccounts:
+  # The "name" will be used to set the AWS Account name
+  # The "name" value does not currently support spaces
+  # The "name" value DOES NOT need to match the account name
+  - name: SharedServices
+    description: The SharedServices account
+    email: <shared-services>@example.com  # <----- UPDATE EMAIL ADDRESS
+    organizationalUnit: Infrastructure
+  - name: Network
+    description: The Network account
+    email: <network>@example.com  # <----- UPDATE EMAIL ADDRESS
+    organizationalUnit: Infrastructure
+  - name: Perimeter
+    description: The Perimeter account
+    email: <perimeter>@example.com  # <----- UPDATE EMAIL ADDRESS
+    organizationalUnit: Infrastructure
+----
+
+===== replacements-config.yaml
+
+Update the following parameters to match your environment:
+
+[source,yaml]
+----
+globalReplacements:
+  ...
+  # Home Region
+  - key: HomeRegion
+    type: String
+    value: us-east-1 # <----- UPDATE TO YOUR HOME REGION
+  - key: EnabledRegions
+    type: StringList
+    value:
+      - "us-east-1" # <----- UPDATE TO INCLUDE HOME REGION + ADDITIONAL REGIONS TO ENABLE
+      # - "us-west-2" # <----- ADD ADDITIONAL REGIONS AS NEEDED
+
+  # AWS Budgets Notification Emails
+  - key: BudgetsEmail
+    type: String
+    value: <budget-notifications>@example.com  # <----- UPDATE EMAIL ADDRESS
+
+  # SNS email notification configuration
+  - key: SecurityHigh
+    type: String
+    value: <notify-high>@example.com # <----- UPDATE EMAIL ADDRESS
+  - key: SecurityMedium
+    type: String
+    value: <notify-medium>@example.com # <----- UPDATE EMAIL ADDRESS
+  - key: SecurityLow
+    type: String
+    value: <notify-low>@example.com # <----- UPDATE EMAIL ADDRESS
+  ...
+----
+
+==== Deploy Configuration Changes
+
+After updating the mandatory configuration files, push all the changes to your Configuration Repository Location.
+
+TIP: Refer to the link:https://docs.aws.amazon.com/solutions/latest/landing-zone-accelerator-on-aws/step-3.-update-the-configuration-files.html[Configuration Repository Location] documentation for specific instructions based on your chosen repository method.

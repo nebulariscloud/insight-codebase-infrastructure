@@ -1,0 +1,720 @@
+
+
+== Creating and Managing Alarms with LZA
+
+=== Introduction to CloudWatch Alarms
+
+CloudWatch Alarms are a critical component of a well-architected AWS environment, allowing organizations to monitor their resources and applications for specific conditions and take automated actions when those conditions are met. Landing Zone Accelerator (LZA) provides a streamlined, infrastructure-as-code approach to implementing a comprehensive alarm strategy across your AWS Organization.
+
+CloudWatch Alarms offer several key benefits:
+
+* *Proactive Monitoring*: Identify and address issues before they impact end users
+* *Operational Awareness*: Gain visibility into the health and performance of your AWS environment
+* *Automated Response*: Trigger automated remediation actions when alarms enter specific states
+* *Cost Optimization*: Create alarms to monitor and control AWS resource usage and spending
+* *Security and Compliance*: Monitor for suspicious activity and compliance violations
+
+=== Understanding LZA's Alarm Configuration
+
+LZA enables you to create and manage alarms through the `security-config.yaml` file. The platform provides a declarative approach to alarm configuration, allowing you to define:
+
+* Alarm metrics and thresholds
+* Evaluation periods
+* Notification targets
+* Deployment scope (organizational units, accounts, and regions)
+* Treatment of missing data
+
+The alarms created rely on the specified metrics being present and active in the targeted AWS accounts and regions. It's important to note that alarms can be created prior to metrics being present, which offers flexibility in your deployment approach.
+
+=== Alarm Design Principles
+
+When designing your alarm strategy with LZA, consider these key principles:
+
+1. *Actionable Alarms*: Each alarm should provide clear, actionable information and trigger only when human intervention is necessary
+2. *Appropriate Thresholds*: Set thresholds that balance sensitivity (catching issues early) with specificity (avoiding false alarms)
+3. *Proper Notification Routing*: Ensure alerts are sent to the right teams who can respond effectively
+4. *Comprehensive Coverage*: Deploy alarms across all critical services and resources
+5. *Layered Approach*: Implement multiple alarm types (metric, log-based, composite) for defense in depth
+6. *Consistent Implementation*: Apply standardized alarm configurations across accounts and regions
+
+=== Implementing Centralized Alarming with LZA
+
+Follow this structured approach to implement a comprehensive, centralized alarming strategy with LZA:
+
+==== 1. Metric Preparation and Verification
+
+Prior to alarm creation, ensure that the metrics are present and active in each of the targeted AWS accounts:
+
+* *Built-in Metrics*: AWS services automatically publish many metrics to CloudWatch (e.g., EC2 CPU utilization, S3 bucket size)
+* *Custom Metrics*: For custom applications, ensure metrics are being published properly
+* *Log-based Metrics*: If the alarm is based on a metric created with a metric filter, ensure the metric filter has already been deployed and is functioning properly
+
+[NOTE]
+====
+If a metric is not active when an alarm is created, alarm creation will still proceed, but no alarm will be triggered in accounts and regions where the metric is not present or active.
+====
+
+==== 2. Configure Missing Data Treatment
+
+It is crucial to properly configure how your alarms handle missing metrics data:
+
+* Set `treatMissingData: notBreaching` if you want alarms to remain in OK state when metrics are missing
+* Set `treatMissingData: breaching` if missing metrics should trigger an alarm (useful for critical systems that should always be reporting data)
+* Set `treatMissingData: ignore` if missing data points should be ignored in alarm evaluation
+* Set `treatMissingData: missing` if missing data points should be treated as missing
+
+Example configuration:
+```yaml
+alarms:
+  - name: HighCpuUtilization
+    namespace: AWS/EC2
+    metricName: CPUUtilization
+    treatMissingData: notBreaching
+    # Additional configuration...
+```
+
+You can also update the link:https://awslabs.github.io/landing-zone-accelerator-on-aws/latest/typedocs/classes/___packages__aws_accelerator_config_lib_common_types.DeploymentTargets.html#excludedAccounts[deploymentTargets] with excluded accounts and regions that will not have the necessary metrics for the alarm.
+
+==== 3. Organize Alarms in Logical Sets
+
+Create alarms in logical sets with a common objective:
+
+* Group alarms by service (e.g., EC2, RDS, Lambda)
+* Group alarms by application or workload
+* Group alarms by criticality level (e.g., critical, warning, informational)
+
+You can correlate alarm sets to specific SNS topics so that any alarm in a group notifies the appropriate teams or triggers specific automated responses.
+
+Example organization:
+```yaml
+alarmSets:
+  - name: EC2-Monitoring
+    deploymentTargets:
+      organizationalUnits:
+        - Infrastructure
+    alarms:
+      # EC2-related alarms
+  - name: Database-Monitoring
+    deploymentTargets:
+      organizationalUnits:
+        - Data
+    alarms:
+      # Database-related alarms
+```
+
+==== 4. Testing in Controlled Environments
+
+Follow this structured approach for safely implementing and testing new alarms:
+
+1. *Create Development Environment*:
+   * Create a new branch in your repository configured with LZA deployment
+   * Follow your organization's branching strategy (e.g., `feature/add-rds-cpu-alarm`)
+
+2. *Configure the Alarm*:
+   * Add the new alarm configuration to the `security-config.yaml` file
+   * Initially target only test accounts or a test organizational unit
+   * Example configuration targeting a test environment:
+```yaml
+alarms:
+ - name: TestHighCpuUtilization
+   # Alarm configuration details...
+   deploymentTargets:
+     accounts:
+       - TestAccount
+     excludedAccounts: []
+```
+
+3. *Review and Deploy*:
+   * Commit your changes to the feature branch
+   * Create a pull/merge request that includes required operations reviews
+   * Have the changes peer-reviewed by appropriate stakeholders
+   * After approval, merge the changes into the main branch to trigger deployment through the LZA pipeline
+
+==== 5. Validation and Verification
+
+After deployment, verify that your alarms function as expected:
+
+1. *Monitor Deployment*:
+   * Track the LZA pipeline execution to ensure successful deployment
+   * Verify in the CloudWatch console that the alarms have been created as expected
+   * Check that the alarms are in the correct state (usually OK if the metric is within thresholds)
+
+2. *Functional Testing*:
+   * Perform actions to deliberately cause the alarm to breach its threshold
+   * Verify that the alarm state changes from OK to ALARM in CloudWatch
+   * Confirm that notifications are delivered to the expected targets (email, PagerDuty, etc.)
+   * If applicable, verify that automated remediation actions are triggered correctly
+   * Document any issues or unexpected behaviors for further refinement
+
+As your set of alarms grows, consider creating automated scripts to simulate breaches for regular testing and verification.
+
+
+3. *Documentation and Runbooks*:
+   * Document the alarm's purpose, expected behavior, and response procedures
+   * Create or update runbooks for responding to this alarm
+   * Ensure operations teams understand what actions to take when the alarm triggers
+
+==== 6. Phased Deployment Strategy
+
+Once thoroughly tested and validated:
+
+1. *Expand Deployment*:
+   * Create a new branch for the expanded deployment
+   * Modify the configuration to apply to additional OUs and regions in phases
+   * Follow an incremental approach, prioritizing non-critical environments before critical ones
+   * Create a new pull/merge request for this expanded deployment
+   * Follow your change management process for approval and implementation
+
+```yaml
+alarms:
+ - name: HighCpuUtilization
+   # Alarm configuration details...
+   deploymentTargets:
+     organizationalUnits:
+       - NonProduction
+     excludedAccounts: []
+```
+
+2. *Monitor and Adjust*:
+   * Closely monitor alarm behavior in each new environment
+   * Track false positives/negatives and adjust thresholds as needed
+   * Gather feedback from operations teams and stakeholders
+   * Make iterative improvements based on real-world performance
+
+3. *Production Deployment*:
+   * Deploy to sensitive environments (like production) only after successful validation in non-production
+   * Schedule production deployments for times when potential disruption is minimized
+   * Consider a staged rollout across production accounts if you have many
+   * Perform a final review of alarm configuration before deploying to critical environments
+
+4. *Post-Implementation Review*:
+   * Conduct a review after the alarm has been in production for a period (e.g., 30 days)
+   * Assess effectiveness, accuracy, and any operational impacts
+   * Document lessons learned and recommendations for future alarm implementations
+
+=== Common CloudWatch Alarm Patterns
+
+==== Infrastructure Monitoring Alarms
+
+```yaml
+alarms:
+  - name: HighCpuUtilization
+    namespace: AWS/EC2
+    metricName: CPUUtilization
+    statistic: Average
+    period: 300
+    threshold: 80
+    comparisonOperator: GreaterThanThreshold
+    evaluationPeriods: 3
+    treatMissingData: notBreaching
+    alarmDescription: "Alarm when CPU exceeds 80% for 15 minutes"
+    snsTopicName: operational-alerts
+    snsAlertLevel: warning
+```
+
+==== Security Monitoring Alarms
+
+```yaml
+alarms:
+  - name: GuardDutyFindingsAlarm
+    namespace: AWS/GuardDuty
+    metricName: FindingCount
+    statistic: Sum
+    period: 300
+    threshold: 1
+    comparisonOperator: GreaterThanOrEqualToThreshold
+    evaluationPeriods: 1
+    treatMissingData: notBreaching
+    alarmDescription: "GuardDuty findings detected"
+    snsTopicName: security-alerts
+    snsAlertLevel: critical
+    dimensions:
+      - name: DetectorId
+        value: ${GUARDDUTY_DETECTOR_ID}
+      - name: Severity
+        value: High
+```
+
+This alarm monitors the standard FindingCount metric from Amazon GuardDuty, triggering when high-severity findings are detected. GuardDuty must be enabled in the account for this metric to be available.
+
+==== Cost Optimization Alarms
+
+```yaml
+alarms:
+  - name: EstimatedCharges
+    namespace: AWS/Billing
+    metricName: EstimatedCharges
+    statistic: Maximum
+    period: 86400  # 24 hours
+    threshold: 1000
+    comparisonOperator: GreaterThanThreshold
+    evaluationPeriods: 1
+    treatMissingData: missing
+    alarmDescription: "Monthly AWS charges have exceeded $1000"
+    snsTopicName: finance-alerts
+    snsAlertLevel: warning
+```
+
+==== Availability Monitoring Alarms
+
+```yaml
+alarms:
+  - name: ApiGatewayLatency
+    namespace: AWS/ApiGateway
+    metricName: Latency
+    dimensions:
+      - name: ApiName
+        value: MainServiceApi
+      - name: Stage
+        value: prod
+    statistic: p90
+    period: 60
+    threshold: 1000  # milliseconds
+    comparisonOperator: GreaterThanThreshold
+    evaluationPeriods: 5
+    treatMissingData: breaching
+    alarmDescription: "API Gateway latency exceeds 1 second (p90) for 5 minutes"
+    snsTopicName: application-alerts
+    snsAlertLevel: critical
+```
+
+=== Advanced Alarm Configuration
+
+==== Composite Alarms
+
+Composite alarms combine multiple metric alarms using logical operators (AND, OR) to reduce noise and provide more meaningful alerts. While LZA doesn't directly support composite alarms in its `security-config.yaml`, you can create them through LZA's `customizations-config.yaml` using CloudFormationStack or CloudFormationStackSet resources.
+
+Example CloudFormation template for composite alarms:
+```yaml
+Resources:
+  CompositeHighCpuAndLowMemory:
+    Type: AWS::CloudWatch::CompositeAlarm
+    Properties:
+      AlarmName: CompositeHighCpuAndLowMemory
+      AlarmRule: ALARM(HighCpuUtilization) AND ALARM(LowMemoryAvailable)
+      AlarmDescription: Triggers when both CPU is high and memory is low
+      AlarmActions:
+        - !Ref CompositeAlarmTopic
+      OKActions:
+        - !Ref CompositeAlarmTopic
+
+  CompositeAlarmTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: CompositeAlarmNotifications
+      TopicName: composite-alarm-notifications
+```
+
+Implementation in LZA's customizations-config.yaml:
+
+```yaml
+cloudFormationStacks:
+  - name: composite-alarms
+    description: "Deploys composite alarms for critical systems"
+    template: templates/composite-alarms.yaml
+    regions:
+      - us-east-1
+    deploymentTargets:
+      organizationalUnits:
+        - Infrastructure
+    parameters: []
+    capabilities: []
+```
+
+For organization-wide deployment, use CloudFormationStackSets instead:
+
+```yaml
+cloudFormationStackSets:
+  - name: org-wide-composite-alarms
+    description: "Deploys composite alarms across the organization"
+    template: templates/composite-alarms.yaml
+    regions:
+      - us-east-1
+      - us-west-2
+    deploymentTargets:
+      organizationalUnits:
+        - Root
+    parameters: []
+    capabilities: []
+```
+
+For more details, see:
+- CloudFormationStack: link:https://awslabs.github.io/landing-zone-accelerator-on-aws/latest/typedocs/interfaces/___packages__aws_accelerator_config_lib_models_customizations_config.ICloudFormationStack.html[LZA Documentation]
+- CloudFormationStackSet: link:https://awslabs.github.io/landing-zone-accelerator-on-aws/latest/typedocs/interfaces/___packages__aws_accelerator_config_lib_models_customizations_config.ICloudFormationStackSet.html[LZA Documentation]
+
+
+
+==== Alarm Actions and Automated Remediation
+
+CloudWatch Alarms can trigger automated remediation actions through AWS Systems Manager Automation or AWS Lambda functions. You can leverage standard SSM documents that are available in all AWS accounts or create custom remediation workflows.
+
+1. *EC2 Instance Restart using SSM*:
+```yaml
+alarms:
+  - name: EC2HighCPUAlarm
+    namespace: AWS/EC2
+    metricName: CPUUtilization
+    dimensions:
+      - name: InstanceId
+        value: i-1234567890abcdef
+    statistic: Average
+    period: 300
+    threshold: 90
+    comparisonOperator: GreaterThanThreshold
+    evaluationPeriods: 3
+    treatMissingData: breaching
+    alarmDescription: "CPU utilization exceeds 90% for 15 minutes"
+    alarmActions:
+      - arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:automation-definition/AWS-RestartEC2Instance
+```
+
+2. *Integration with SNS and Lambda for Custom Remediation*:
+
+First, configure your alarm to send notifications to an SNS topic:
+```yaml
+alarms:
+  - name: RDSHighCPUAlarm
+    namespace: AWS/RDS
+    metricName: CPUUtilization
+    dimensions:
+      - name: DBInstanceIdentifier
+        value: my-database
+    statistic: Average
+    period: 300
+    threshold: 85
+    comparisonOperator: GreaterThanThreshold
+    evaluationPeriods: 3
+    treatMissingData: notBreaching
+    alarmDescription: "RDS CPU utilization exceeds 85% for 15 minutes"
+    snsTopicName: db-remediation-topic
+```
+
+Then, create a Lambda function that subscribes to this topic and initiates remediation:
+```yaml
+# In customizations-config.yaml
+lambdaFunctions:
+  - name: db-remediation-function
+    runtime: nodejs14.x
+    handler: index.handler
+    description: "Performs RDS remediation actions when alarms trigger"
+    timeout: 30
+    path: lambda/db-remediation
+    environmentVariables:
+      LOG_LEVEL: info
+```
+
+The Lambda can initiate SSM Automation documents that perform specific remediation tasks such as:
+- Increasing RDS instance size
+- Running database optimization tasks
+- Creating snapshots before applying changes
+
+3. *Other Common Remediation Actions*:
+   * `AWS-StopEC2Instance` - Stops an EC2 instance when it's not needed
+   * `AWS-RebootRdsInstance` - Reboots an RDS instance
+   * `AWS-EnableEbsOptimization` - Enables EBS optimization on EC2 instances
+   * `AWSSupport-TroubleshootConnectivity` - Diagnoses connectivity issues
+
+=== Integration with Incident Management Systems
+
+==== SNS Topic Configuration for Alert Routing
+
+LZA allows you to configure SNS topics that serve as notification targets for alarms. These topics can be integrated with various incident management systems:
+
+```yaml
+topics:
+  - name: critical-alerts
+    email: critical-alerts@example.com
+    deploymentTargets:
+      organizationalUnits:
+        - Root
+  - name: warning-alerts
+    email: warning-alerts@example.com
+    deploymentTargets:
+      organizationalUnits:
+        - Root
+```
+
+==== Integration Patterns
+
+1. *PagerDuty Integration*:
+   * Subscribe your PagerDuty service to the SNS topic using PagerDuty's SNS integration
+   * Configure severity mapping based on the alert level in the alarm
+
+2. *ServiceNow Integration*:
+   * Deploy a Lambda function that processes SNS messages and creates incidents in ServiceNow
+   * Subscribe the Lambda function to your alarm SNS topics
+
+3. *Slack/Microsoft Teams Integration*:
+   * Use AWS Chatbot to forward SNS notifications to Slack or Microsoft Teams channels
+   * Configure channel routing based on alarm severity and service
+
+=== Alarm Management Best Practices
+
+==== Alarm Lifecycle Management
+
+Implement a structured lifecycle for your CloudWatch alarms:
+
+1. *Requirements Analysis*:
+   * Identify key metrics that indicate system health
+   * Determine appropriate thresholds based on historical data
+   * Define which teams should be notified for different alarm types
+
+2. *Documentation*:
+   * Document each alarm's purpose, expected behavior, and response procedures
+   * Maintain runbooks for common alarm scenarios
+   * Create a central inventory of all alarms across your organization
+
+3. *Regular Review*:
+   * Schedule quarterly reviews of alarm effectiveness
+   * Analyze alarm history to identify patterns and optimization opportunities
+   * Adjust thresholds based on operational experience
+
+4. *Decommissioning Process*:
+   * Define criteria for when alarms should be retired
+   * Implement proper change management for alarm removal
+   * Update documentation when alarms are decommissioned
+
+==== Reducing Alert Fatigue
+
+Alert fatigue occurs when teams receive too many alerts, particularly false positives, leading to important alerts being missed:
+
+1. *Implement Alert Severity Levels*:
+   * Critical: Requires immediate action
+   * Warning: Requires attention within a specific timeframe
+   * Informational: No immediate action required
+
+2. *Use Dynamic Thresholds*:
+   * Implement anomaly detection alarms for metrics with cyclical patterns
+   * Consider time-based thresholds (e.g., different thresholds during business hours vs. off-hours)
+
+3. *Alarm Aggregation*:
+   * Use composite alarms to reduce noise
+   * Implement alarm suppression during known maintenance periods
+   * Consider implementing an alert correlation system
+
+=== Comprehensive Monitoring Strategies with LZA
+
+==== Multi-Layer Monitoring Approach
+
+Implement a multi-layered monitoring approach to ensure comprehensive visibility across your AWS organization:
+
+1. *Infrastructure Layer*:
+   * Monitor core AWS services (EC2, RDS, S3, etc.)
+   * Track resource utilization, availability, and performance
+   * Set alarms for capacity thresholds and health checks
+
+2. *Application Layer*:
+   * Monitor application-specific metrics
+   * Track custom metrics exposed by your applications
+   * Set alarms for application performance and availability
+
+3. *Business Layer*:
+   * Monitor metrics that directly affect business outcomes
+   * Track transaction volumes, API call patterns, and user activity
+   * Set alarms for unusual patterns or business impact events
+
+4. *Security Layer*:
+   * Monitor for suspicious activities and security events
+   * Track compliance with security policies
+   * Set alarms for potential security breaches or compliance violations
+
+==== Account-Level vs. Organization-Level Monitoring
+
+LZA enables both account-specific monitoring and organization-wide monitoring:
+
+*Account-Level Monitoring*:
+```yaml
+alarms:
+  - name: AccountSpecificResourceMonitoring
+    # configuration...
+    deploymentTargets:
+      accounts:
+        - ApplicationAccount1
+        - ApplicationAccount2
+```
+
+*Organization-Level Monitoring*:
+```yaml
+alarms:
+  - name: OrganizationWideSecurityMonitoring
+    # configuration...
+    deploymentTargets:
+      organizationalUnits:
+        - Root
+```
+
+==== Creating Custom Metric Filters with LZA
+
+[IMPORTANT]
+====
+Many security and operational alarms require custom metrics that are not provided as standard AWS metrics. These must be created *before* configuring alarms that use them. Always ensure your metric filters are properly deployed and generating data before deploying alarms that depend on them.
+====
+
+For many security and operational scenarios, you'll need to create custom metrics based on log data. LZA allows you to define metric filters in the security configuration. These filters extract information from logs (such as CloudTrail) and transform it into numeric metrics that can be monitored with CloudWatch Alarms.
+
+```yaml
+metricFilters:
+  - filterName: UnauthorizedApiCalls
+    logGroupName: /aws/cloudtrail/logs
+    filterPattern: '{$.errorCode="*UnauthorizedOperation"}'
+    metricNamespace: CloudTrailMetrics  # Custom namespace
+    metricName: UnauthorizedApiCallsCount  # Custom metric name
+    metricValue: '1'
+    treatMissingData: notBreaching
+    deploymentTargets:
+      organizationalUnits:
+        - Root
+```
+
+After defining and deploying metric filters, you can create alarms based on these custom metrics. The workflow should be:
+
+1. Define and deploy metric filters
+2. Verify that the filters are generating metrics (check in the CloudWatch Metrics console)
+3. Configure and deploy alarms that use these metrics
+
+This two-step process is essential because alarms cannot trigger properly if their underlying metrics don't exist or aren't capturing data.
+
+=== Troubleshooting CloudWatch Alarms
+
+==== Common Issues and Resolutions
+
+1. *Missing or Delayed Metrics*:
+   * **Issue**: Alarms do not trigger or metrics seem delayed
+   * **Resolution**:
+     * Verify that the AWS service is publishing metrics correctly
+     * Check for throttling if using custom metrics
+     * Verify that metric filters are correctly configured for log-based metrics
+     * Check for IAM permission issues affecting metric collection
+
+2. *False Positives*:
+   * **Issue**: Alarms trigger when there's no actual problem
+   * **Resolution**:
+     * Adjust threshold values based on historical data analysis
+     * Increase evaluation periods to filter out transient spikes
+     * Consider using anomaly detection instead of static thresholds
+     * Implement composite alarms to reduce noise
+
+3. *Notification Failures*:
+   * **Issue**: Alarms trigger but notifications aren't received
+   * **Resolution**:
+     * Verify SNS topic configuration and subscriptions
+     * Check that email addresses are verified for email notifications
+     * Validate IAM permissions for SNS topic publishing
+     * Check for throttling or delivery issues in the SNS console
+
+==== Alarm Verification Process
+
+Implement a systematic process for verifying alarm functionality:
+
+1. *Setup Phase*:
+   * Create test resources that can be manipulated to trigger alarms
+   * Document expected alarm behavior and notification flow
+   * Create test scripts to simulate alarm conditions
+
+2. *Verification Steps*:
+   * Force alarm conditions (e.g., increase resource utilization)
+   * Verify alarm state changes in CloudWatch console
+   * Confirm notification delivery to expected channels
+   * Test automated remediation actions if configured
+
+3. *Periodic Testing*:
+   * Schedule regular alarm tests, especially for critical alarms
+   * Automate testing where possible to ensure consistent verification
+   * Update test procedures when alarm configurations change
+
+==== Alarm Analysis and Optimization
+
+Continuously improve your alarm configuration:
+
+1. *Regular Reviews*:
+   * Analyze alarm history reports from CloudWatch
+   * Identify patterns of recurring alarms
+   * Review false positives and false negatives
+
+2. *Alarm Metric*:
+   * Track key metrics about your alarms:
+     * Mean Time Between Alarms (MTBA)
+     * False Positive Rate
+     * Mean Time To Acknowledge (MTTA)
+     * Mean Time To Resolve (MTTR)
+
+3. *Progressive Refinement*:
+   * Start with conservative thresholds and adjust based on operational data
+   * Implement more sophisticated alarm logic as you gather more data
+   * Regularly update alarm documentation with lessons learned
+
+=== Alarm Templates for Common AWS Services
+
+==== AWS Lambda Monitoring Template
+
+```yaml
+alarmSets:
+  - name: LambdaMonitoring
+    deploymentTargets:
+      organizationalUnits:
+        - Applications
+    alarms:
+      - name: LambdaErrors
+        namespace: AWS/Lambda
+        metricName: Errors
+        dimensions:
+          - name: FunctionName
+            value: ${FUNCTION_NAME}
+        statistic: Sum
+        period: 60
+        threshold: 5
+        comparisonOperator: GreaterThanThreshold
+        evaluationPeriods: 1
+        treatMissingData: notBreaching
+        alarmDescription: "Lambda function error rate is too high"
+        snsTopicName: application-alerts
+        snsAlertLevel: critical
+
+      - name: LambdaThrottles
+        namespace: AWS/Lambda
+        metricName: Throttles
+        dimensions:
+          - name: FunctionName
+            value: ${FUNCTION_NAME}
+        statistic: Sum
+        period: 60
+        threshold: 5
+        comparisonOperator: GreaterThanThreshold
+        evaluationPeriods: 1
+        treatMissingData: notBreaching
+        alarmDescription: "Lambda function is being throttled"
+        snsTopicName: application-alerts
+        snsAlertLevel: warning
+
+      - name: LambdaDuration
+        namespace: AWS/Lambda
+        metricName: Duration
+        dimensions:
+          - name: FunctionName
+            value: ${FUNCTION_NAME}
+        statistic: p90
+        period: 60
+        threshold: 5000  # milliseconds
+        comparisonOperator: GreaterThanThreshold
+        evaluationPeriods: 3
+        treatMissingData: notBreaching
+        alarmDescription: "Lambda function duration is too high"
+        snsTopicName: application-alerts
+        snsAlertLevel: warning
+```
+
+=== Conclusion
+
+CloudWatch Alarms are a foundational component of effective AWS operations. By leveraging LZA's capabilities for centralized alarm configuration and management, organizations can implement comprehensive monitoring across their entire AWS footprint with consistency and governance.
+
+When implemented correctly, a well-designed CloudWatch alarm strategy provides:
+
+* *Early Warning System*: Detect and address issues before they impact users
+* *Operational Visibility*: Gain insights into system health and performance
+* *Security Awareness*: Quickly identify potential security threats
+* *Cost Control*: Monitor and manage AWS resource usage and spending
+* *Compliance Support*: Verify and demonstrate compliance with requirements
+
+Remember that effective alarming is an iterative process. Start with basic alarms for critical resources, test thoroughly, and progressively expand your monitoring coverage. Regularly review and refine your alarm configurations based on operational experience and changing requirements.
+
+By following the best practices outlined in this document and leveraging LZA's capabilities, you can build a robust, scalable, and effective alarm strategy that supports your organization's AWS operations.

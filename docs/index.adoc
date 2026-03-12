@@ -1,0 +1,152 @@
+[#top]
+= Landing Zone Accelerator on AWS (LZA) Universal Configuration Documentation
+:toc: left
+:toclevels: 3
+:doctype: book
+:icons: font
+:iconfont-remote!:
+:iconfont-name: icons
+
+[.lead]
+
+image:./assets/images/lza-uc-architecture.png[LZA Universal Config Architecture]
+
+== Introduction
+
+The Landing Zone Accelerator on AWS (LZA) Universal Configuration (UC) provides a ready-to-deploy, comprehensive foundation for establishing a secure, well-architected multi-account AWS environment built on AWS Control Tower. This solution addresses the critical challenge organizations face when scaling AWS adoption: establishing a consistent, secure, and compliant foundation without extensive cloud expertise or months of architectural design work.
+
+The LZA UC provides a unified baseline that incorporates the core components and best practices common across all industries. Rather than maintaining separate configurations for healthcare, financial services, government, and other sectors, the Universal Configuration establishes a baseline foundation that serves as the starting point for any organization. Industry-specific and vertical-specific guidance is then implemented as targeted enhancements on top of this solid baseline, ensuring consistency while allowing for specialized requirements.
+
+*Business Value:*
+
+* *Accelerated Time-to-Value:* Deploy a production-ready AWS environment in days rather than months by leveraging pre-built, industry-validated configurations
+
+* *Reduced Risk:* Implement AWS security best practices from day one with configurations that adhere to multiple compliance frameworks including NIST, CIS, and PCI
+
+* *Operational Excellence:* Gain standardized operational processes, centralized logging, comprehensive monitoring, and automated governance controls
+
+* *Cost Optimization:* Avoid costly redesigns and security remediations through preventative guardrails and architectural best practices
+
+* *Future-Proof Foundation:* Build on an extensible platform that supports growth from a few accounts to hundreds, with consistent policies and controls
+
+*Designed For:* Organizations seeking to establish or optimize their AWS environment with enterprise-grade security, governance, and operational capabilities while minimizing implementation complexity and accelerating cloud adoption.
+
+*Implementation Approach:* The Universal Configuration provides a set of configuration files that define your AWS organizational structure, security controls, network architecture, and operational tooling. This documentation guides your team through evaluation, customization, deployment, and ongoing operations—transforming sophisticated cloud architecture best practices into actionable implementation steps.
+
+=== About This Documentation
+
+This documentation is organized to help you understand the UC architecture and how it accelerates your organization's cloud journey.
+
+* *Navigation*: Use the table of contents on the left to navigate between documentation sections
+* *Links*: Follow cross-references to related sections for deeper understanding
+* *Code Examples*: Configuration file examples are provided throughout to illustrate key concepts
+
+=== How to Use This Documentation
+
+*For Organizations Implementing LZA Universal Configuration:*
+
+1. Begin with the link:02-Getting-Started/index.adoc[Getting Started] section for implementation guidance
+2. Use the category navigation to find detailed information about specific components
+3. Review customization options to adapt the configuration to your specific requirements
+4. Consult the Operations documentation for day-to-day management guidance
+
+*Note for Existing LZA Users:*
+If you're already using a customized LZA implementation, we encourage you to review the Universal Configuration documentation. The UC incorporates the latest best practices and design patterns that may benefit your existing deployment. You're welcome to adopt specific components or approaches from the Universal Configuration that align with your organization's needs.
+
+=== Documentation Structure
+
+The documentation is primarily organized into logical categories that align with the main AWS service categories supported by LZA and the LZA Universal Configuration:
+
+==== Overview
+
+This section provides a high-level introduction to the LZA Universal Configuration, including its design principles, architecture, and key differences from other approaches. It explains the overall structure and philosophy behind the configuration. Organizations considering LZA and the LZA Universal Configuration approach will find introductions to LZA, design principles, and architecture summaries that help determine if the LZA Universal Configuration aligns with their cloud strategy.
+
+link:01-Overview/index.adoc[Go to Overview →]
+
+==== Getting Started
+
+This section provides guidance on setting up and deploying the LZA Universal Configuration, including prerequisites, installation steps, and initial configuration. Cloud teams preparing to implement the LZA Universal Configuration will find step-by-step implementation guidance, configuration instructions, and deployment prerequisites that ensure proper setup of their foundation for a successful implementation.
+
+link:02-Getting-Started/index.adoc[Go to Getting Started →]
+
+==== Management & Governance
+
+This section details the management and governance components implemented by the LZA Universal Configuration, including AWS Organizations structure, Control Tower integration, and backup strategies. Cloud architects and governance teams will find information about organizational units, account structure, backup policies, and governance controls that are fundamental to maintaining control and compliance across the AWS environment.
+
+link:03-Management-Governance/index.adoc[Go to Management & Governance →]
+
+==== Security, Identity & Compliance
+
+This section covers the security, identity, and compliance approach implemented in the LZA Universal Configuration, detailing how authentication, authorization, and security services are configured. Security teams and compliance officers will find IAM policies, roles, MFA configuration, and information about security services like GuardDuty, Security Hub, and AWS Config that are essential for protecting the AWS environment.
+
+link:04-Security-Identity-Compliance/index.adoc[Go to Security, Identity & Compliance →]
+
+==== Networking
+
+This section covers the network architecture implemented by the LZA Universal Configuration, including VPC design, connectivity patterns, and security controls. Network architects will find information about network modules, IP address management, perimeter security, and transit gateway configuration that provides the connectivity fabric enabling secure communication across the environment.
+
+link:05-Networking/index.adoc[Go to Networking →]
+
+==== Logging & Monitoring
+
+This section details the logging and monitoring infrastructure implemented in the LZA Universal Configuration, explaining how logs are collected, stored, analyzed, and retained. Security operations and compliance teams will find information about centralized logging, CloudWatch configuration, flow logs, and security monitoring that are essential for security investigation, compliance, and operational troubleshooting.
+
+link:06-Logging-Monitoring/index.adoc[Go to Logging & Monitoring →]
+
+==== Operations
+
+This section provides guidance on day-to-day operational tasks, including managing accounts, adding resources, and maintaining the environment. Cloud operations and infrastructure teams will find procedures for adding accounts, managing OUs, configuring VPCs, monitoring, and other operational tasks that help assess the long-term maintainability of the solution.
+
+link:07-Operations/index.adoc[Go to Operations →]
+
+==== Region and Industry Guidance
+
+This section provides guidance on adapting the Universal Configuration to meet specific regional requirements and industry regulations. Organizations with specific compliance needs will find information about regional considerations and industry-specific controls that help customize the baseline configuration for their unique requirements.
+
+link:08-Region-and-Industry-Guidance/index.adoc[Go to Region and Industry Guidance →]
+
+=== Key Configuration Files
+
+The LZA configuration consists of several YAML files that work together to define an AWS landing zone according to best practices:
+
+* *`replacements-config.yaml`*: Environment-specific variables that are substituted throughout other configuration files
+* *`organization-config.yaml`*: Defines the AWS Organizations structure, OUs, and organizational policies
+* *`accounts-config.yaml`*: Specifies the AWS accounts in your organization and their properties
+* *`iam-config.yaml`*: Configures IAM policies, roles, and groups across your accounts
+* *`security-config.yaml`*: Implements security services like GuardDuty, Security Hub, and AWS Config
+* *`network-config.yaml`*: Defines the VPC architecture, subnets, and network connectivity
+
+Understanding these configuration files is essential for evaluating how the LZA Universal Configuration would work in your environment. You can refer to the LZA GitHub pages documentation on link:https://awslabs.github.io/landing-zone-accelerator-on-aws/latest/user-guide/config/[Included Services, Features, and Configuration References].
+
+=== Documentation Organization
+
+Each category section follows a consistent structure that helps you understand both the capabilities provided and the configuration options available:
+
+* **Capabilities**: A high-level overview of what functionality is covered in that category
+* **Features**: Specific features enabled by the LZA Universal Configuration in that category
+* **Configuration Settings**: Detailed explanations of configuration options, with warnings and alternatives where applicable
+
+=== Getting Support
+
+If you have questions or need additional information about the LZA Universal Configuration:
+
+* *Consult the Documentation*: Check if your question is addressed in the relevant documentation section
+* *Review Known Issues*: Check the Known Issues section in each documentation area
+* *Contact Support*: Reach out to your AWS account team for additional guidance and assistance
+
+=== Best Practices for Evaluating and Implementing UC
+
+1. *Start with Understanding the related AWS services*: Take time to understand the design principles and architecture for the AWS services used by LZA and configured by UC before deciding if the default settings in LZA Universal Configuration are right for your organization
+2. *Compare with Requirements*: Assess how the LZA Universal Configuration aligns with your organization's security, operational, and governance requirements
+3. *Plan for Customization*: Identify areas where you might need to customize the configuration to meet your specific needs
+4. *Consider Operations*: Evaluate the operational model required to maintain and evolve the environment over time
+5. *Engage Stakeholders*: Include security, networking, operations, and application teams in the evaluation process
+
+=== Additional Resources
+
+This documentation complements other resources available for the Landing Zone Accelerator:
+
+* link:https://docs.aws.amazon.com/solutions/latest/landing-zone-accelerator-on-aws/solution-overview.html[LZA Implementation Guide]
+* link:https://awslabs.github.io/landing-zone-accelerator-on-aws/latest/[LZA GitHub Pages]
+
+link:#top[Back to Top]

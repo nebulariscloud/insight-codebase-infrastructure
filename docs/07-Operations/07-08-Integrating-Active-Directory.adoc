@@ -1,0 +1,231 @@
+= Integrating Active Directory with LZA
+
+== Introduction to Active Directory Integration
+
+Landing Zone Accelerator on AWS (LZA) provides robust capabilities for integrating with Microsoft Active Directory, enabling centralized identity management and single sign-on across your AWS environment. This integration is crucial for enterprises that want to maintain consistent identity management practices between their on-premises environment and AWS cloud.
+
+LZA enables AWS IAM Identity Center (formerly AWS Single Sign-On) and configures the SharedServices account as the delegated administrator account. While the LZA Universal Config does not enable Active Directory by default, it provides multiple options for Active Directory integration.
+
+=== Integration Options
+
+The LZA Universal Config supports multiple approaches to integrating with Active Directory:
+
+* *AWS Managed Microsoft AD*: A fully managed Active Directory service provided by AWS
+* *AD Connector*: A directory gateway to redirect directory requests to your on-premises AD
+* *External Identity Provider*: Connect to your existing identity provider using SAML or other federation methods
+
+== AWS Managed Microsoft AD Implementation
+
+=== Overview
+
+AWS Managed Microsoft AD is a fully managed, highly available Microsoft Active Directory service in the AWS Cloud. It can be used as a standalone directory for your AWS resources or connected to your on-premises Active Directory using AD Trust relationships.
+
+=== Configuration Steps
+
+==== 1. Configure Managed AD in iam-config.yaml
+
+To implement AWS Managed Microsoft AD through LZA, you need to modify your `iam-config.yaml` file to include `managedActiveDirectories` configuration:
+
+[yaml]
+----
+managedActiveDirectories:
+  - name: example-mad
+    account: SharedServices
+    region: us-east-1
+    dnsName: example.local
+    netBiosName: EXAMPLE
+    edition: Standard # Enterprise or Standard
+    resolveFromVpc: Network-Main-Shared
+    vpcSettings:
+      vpcName: Network-Main-Shared
+      subnets:
+        - Network-Main-Shared-Subnet-Private1
+        - Network-Main-Shared-Subnet-Private2
+    secretConfig:
+      account: Management
+      region: us-east-1
+      adminSecretName: /accelerator/directory-service/mad/admin
+    # Optional settings - Comment these out until after you deploy the Managed AD instance
+    # activeDirectoryConfigurationInstance: 
+    #   instanceType: t3.large
+    #   vpcName: Network-Main-Shared
+    #   subnetName: Network-Main-Shared-Subnet-Private1
+    #   imagePath: /aws/service/ami-windows-latest/Windows_Server-2019-English-Full-Base
+    #   securityGroupInboundSources:
+    #     - 10.0.0.0/16
+----
+
+This configuration:
+
+* Creates a Managed Microsoft AD in the SharedServices account
+* Deploys it across two private subnets in the Network-Main-Shared VPC
+* Stores the administrative credentials in Secrets Manager in the Management account
+* Optionally configures an EC2 instance for AD administration
+
+==== 2. Deploy the Configuration
+
+After modifying the `iam-config.yaml` file:
+
+
+1. Commit and push your changes to initiate the LZA pipeline
+2. Monitor the pipeline execution for successful deployment
+
+==== 3. Configure Active Directory Administration Instance (Optional)
+
+After the initial deployment succeeds, you can enhance the configuration with an Active Directory administration instance:
+
+[yaml]
+----
+managedActiveDirectories:
+  - name: example-mad
+    # Previous configuration...
+    activeDirectoryConfigurationInstance:
+      instanceType: t3.large
+      vpcName: Network-Main-Shared
+      subnetName: Network-Main-Shared-Subnet-Private1
+      imagePath: /aws/service/ami-windows-latest/Windows_Server-2019-English-Full-Base
+      securityGroupInboundSources:
+        - 10.0.0.0/16
+      userDataScripts:
+        - scriptName: Join-Domain
+          scriptFilePath: ad-scripts/join-domain.ps1
+        - scriptName: Install-Tools
+          scriptFilePath: ad-scripts/install-tools.ps1
+----
+
+This configuration deploys an EC2 instance with Windows Server that can be used for Active Directory administration. The user data scripts can automate domain joining and tool installation.
+
+== AD Connector Implementation
+
+AD Connector provides a proxy service that connects AWS applications to your existing on-premises Active Directory without caching information in the cloud.
+
+[IMPORTANT]
+====
+LZA does not provide direct configuration for AD Connector deployment. It must be manually deployed through the AWS Console and then can be integrated with IAM Identity Center.
+====
+
+=== Manual Deployment Process
+
+1. *Prerequisites*:
+   * Establish network connectivity between AWS VPC and on-premises (Direct Connect or VPN)
+   * Create AD service account with appropriate permissions
+   * Ensure proper DNS resolution between environments
+
+2. *Deployment Steps*:
+   * Deploy AD Connector manually in the SharedServices account using AWS Console
+   * Use the Network-Main-Shared VPC created by LZA
+   * Note the Directory ID (d-xxxxxxxxxx) for IAM Identity Center configuration
+
+3. *Integration with IAM Identity Center using LZA*:
+
+[yaml]
+----
+identityCenter:
+  delegatedAdminAccount: SharedServices
+  name: accelerator-identity-center
+  # Permission set configurations
+  permissionSets: []
+  # Assignment configurations
+  assignments: []
+----
+
+Once deployed in SharedServices, AD Connector can provide organization-wide identity management with centralized authentication for all accounts in your AWS Organization.
+
+== Integration with IAM Identity Center
+
+=== Overview
+
+AWS IAM Identity Center (formerly AWS SSO) provides single sign-on access to AWS accounts and applications. When integrated with Active Directory, it allows users to access AWS resources using their AD credentials.
+
+=== Configuration Steps
+
+==== 1. Configure IAM Identity Center in iam-config.yaml
+
+[yaml]
+----
+identityCenter:
+  delegatedAdminAccount: SharedServices
+  name: accelerator-identity-center
+  
+  # Define Permission Sets
+  permissionSets:
+    - name: AdministratorAccess
+      policies:
+        awsManaged:
+          - AdministratorAccess
+    - name: ReadOnlyAccess
+      policies:
+        awsManaged:
+          - ReadOnlyAccess
+  
+  # Assign Permission Sets to Users/Groups
+  assignments:
+    - name: Administrator-Assignment
+      permissionSetName: AdministratorAccess
+      principalId: admin-group
+      principalType: GROUP
+      deploymentTargets:
+        accounts:
+          - Management
+          - SharedServices
+    - name: ReadOnly-Assignment
+      permissionSetName: ReadOnlyAccess
+      principalId: readonly-group
+      principalType: GROUP
+      deploymentTargets:
+        organizationalUnits:
+          - Workloads
+----
+
+This configuration:
+
+* Sets up the IAM Identity Center configuration in LZA
+* Creates permission sets that define access levels
+* Assigns these permission sets to Active Directory users and groups
+
+[IMPORTANT]
+====
+The directory integration (connecting IAM Identity Center to your Active Directory) must be configured manually through the AWS Console after deploying the AD solution. LZA doesn't provide direct configuration for the identity source.
+====
+
+==== 2. Managing Permission Sets and Assignments
+
+After the initial configuration, you can manage permission sets and assignments through updates to `iam-config.yaml`:
+
+1. *Adding New Permission Sets*:
+[yaml]
+----
+permissionSets:
+  # Existing permission sets...
+  - name: DatabaseAdministrator
+    policies:
+      awsManaged:
+        - AmazonRDSFullAccess
+        - AmazonDynamoDBFullAccess
+      customerManaged:
+        - DatabaseAccessPolicy
+----
+
+2. *Creating New Assignments*:
+
+[yaml]
+----
+assignments:
+  # Existing assignments...
+  - name: DatabaseAdmin-Assignment
+    permissionSetName: DatabaseAdministrator
+    principalId: database-admins
+    principalType: GROUP
+    deploymentTargets:
+      accounts:
+        - Database
+----
+
+== Additional Resources
+
+=== Documentation References
+
+* link:https://awslabs.github.io/landing-zone-accelerator-on-aws/latest/typedocs/interfaces/___packages__aws_accelerator_config_lib_models_iam_config.IManagedActiveDirectoryConfig.html#activeDirectoryConfigurationInstance[LZA managedActiveDirectories Configuration]
+* link:https://docs.aws.amazon.com/singlesignon/latest/userguide/tutorials.html[IAM Identity Center Identity Source Tutorials]
+* link:https://docs.aws.amazon.com/directoryservice/latest/admin-guide/directory_microsoft_ad.html[AWS Managed Microsoft AD Documentation]
+* link:https://docs.aws.amazon.com/directoryservice/latest/admin-guide/directory_ad_connector.html[AD Connector Documentation]

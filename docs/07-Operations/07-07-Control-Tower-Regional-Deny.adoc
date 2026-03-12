@@ -1,0 +1,220 @@
+= AWS Control Tower Regional Deny
+:toc:
+:toclevels: 3
+:section7:
+:doctype: book
+:icons: font
+:iconfont-remote!:
+:iconfont-name: icons
+
+== Overview
+
+AWS Control Tower provides Region deny capabilities, which assist you in limiting access to AWS services and operations for enrolled accounts in your AWS Control Tower environment. The Region deny feature is an important governance control that can help organizations meet compliance requirements, enforce data residency, and reduce the attack surface area of your AWS environment.
+
+Regional deny works by applying Service Control Policies (SCPs) that restrict access to AWS services and operations outside of specified AWS Regions. This effectively prevents your users from creating or accessing resources in unauthorized Regions, even if they have IAM permissions that would otherwise allow such access.
+
+== Why Use Regional Deny
+
+=== Data Residency and Regulatory Compliance
+
+Many organizations operate under regulatory frameworks that require data to remain within specific geographical boundaries. For example:
+
+* European organizations subject to GDPR may need to ensure all data processing occurs within EU regions
+* Financial institutions in certain countries may be required to keep customer data within national boundaries
+* Healthcare organizations may need to follow country-specific regulations about patient data storage locations
+
+The Region deny feature in AWS Control Tower provides a robust mechanism to enforce these requirements by preventing the creation of resources in non-approved Regions.
+
+=== Reduced Security Risk and Attack Surface
+
+By limiting the AWS Regions where your organization can operate:
+
+* You reduce the attack surface available to potential adversaries
+* You simplify security monitoring by focusing only on approved Regions
+* You decrease the risk of shadow IT by preventing unauthorized regional deployments
+* You enforce standardization across your AWS environment
+
+=== Cost Control and Resource Management
+
+Restricting Regional access also helps with:
+
+* Preventing unexpected or unplanned spending in non-standard Regions
+* Centralizing resources for better visibility and management
+* Enforcing architectural standards across your organization
+* Optimizing operational processes by focusing on specific Regions
+
+== How Regional Deny Works
+
+The Regional deny feature in AWS Control Tower uses Service Control Policies (SCPs) to implement restrictions. SCPs are a type of organization policy that you can use to manage permissions in your organization at the organization, organizational unit (OU), or account level.
+
+When you enable Regional deny, AWS Control Tower creates an SCP with the following characteristics:
+
+* It uses the `aws:RequestedRegion` global condition key to evaluate what Region a service request is targeting
+* It denies access to operations outside of the specified Regions
+* It contains exceptions for global services that don't support Regional restrictions
+* It includes an exception for the AWS Control Tower execution role to ensure Control Tower operations aren't affected
+
+The SCP follows this general structure:
+
+[source,json]
+----
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DenyAllOutsideSpecifiedRegions",
+      "Effect": "Deny",
+      "NotAction": [
+        "a4b:*", "access-analyzer:*", "account:*", "acm:*", "activate:*", "artifact:*", "aws-marketplace-management:*", 
+        "aws-marketplace:*", "aws-portal:*", "billing:*", "billingconductor:*", "budgets:*", "ce:*", "chatbot:*", "chime:*", 
+        "cloudfront:*", "compass:*", "compute-optimizer:*", "consolidatedbilling:*", "cur:*", "datapipeline:*", "directconnect:*", 
+        "ec2:DescribeRegions", "ec2:DescribeTransitGateways", "ec2:DescribeVpnGateways", "ecr-public:*", "finspace:*", "globalaccelerator:*", 
+        "health:*", "iam:*", "importexport:*", "kms:*", "networkmanager:*", "organizations:*", "payments:*", "pricing:*", 
+        "route53-recovery-cluster:*", "route53-recovery-control-config:*", "route53-recovery-readiness:*", "route53:*", "route53domains:*", 
+        "s3:GetAccountPublic*", "s3:GetBucketLocation", "s3:GetBucketPolicy", "s3:GetBucketPolicyStatus", "s3:GetBucketPublicAccessBlock", 
+        "s3:ListAccessPoints", "s3:ListAllMyBuckets", "s3:ListMultiRegionAccessPoints", "shield:*", "sso:*", "sts:*", "support:*", 
+        "supportapp:*", "supportplans:*", "sustainability:*", "tag:GetResources", "tax:*", "trustedadvisor:*", 
+        "vendor-insights:ListEntitledSecurityProfiles", "waf-regional:*", "waf:*", "wafv2:*"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringNotEquals": {
+          "aws:RequestedRegion": [
+            "us-east-1",
+            "us-west-2",
+            "eu-west-1"
+            // Additional approved regions would be listed here
+          ]
+        },
+        "ArnNotLike": {
+          "aws:PrincipalARN": [
+            "arn:aws:iam::*:role/AWSControlTowerExecution"
+          ]
+        }
+      }
+    }
+  ]
+}
+----
+
+In this example, operations would be allowed only in us-east-1, us-west-2, and eu-west-1 Regions.
+
+== Enabling Regional Deny in Control Tower
+
+There are two ways to apply Regional deny in AWS Control Tower:
+
+=== 1. Landing Zone Level Region Deny
+
+This is the original Regional deny capability that applies at the landing zone level.
+
+==== Steps to Enable:
+
+1. Log in to the AWS Management Console and navigate to the AWS Control Tower console.
+2. Select *Landing zone settings* from the left navigation panel.
+3. Navigate to the *Regions* section.
+4. Under *Deny access to AWS based on the requested AWS Region*, select *Edit*.
+5. Configure the Regions you want to allow access to by selecting them from the list.
+6. Click *Save changes* to apply your configuration.
+
+=== 2. OU Level Region Deny (Configurable Region Deny)
+
+This newer option, referred to as the "OU Region deny control" or "configurable Region deny control," provides more granular control by allowing you to apply Regional restrictions at the Organizational Unit level.
+
+==== Steps to Enable:
+
+1. Log in to the AWS Management Console and navigate to the AWS Control Tower console.
+2. Select *Controls* from the left navigation panel.
+3. Search for the control "Deny access to AWS based on the requested AWS Region for an organizational unit" (Control ID: CT.MULTISERVICE.PV.1).
+4. Click on the control to view details.
+5. Click *Enable control* in the upper right.
+6. Select the target OU(s) where you want to apply the control, then click *Next*.
+7. Select the Regions you wish to allow. You must select at least one Region.
+8. Review your selections and click *Enable control*.
+
+== Considerations and Limitations
+
+=== Important Considerations
+
+1. *Home Region Requirement*: You cannot deny access to your home Region (the Region where you set up AWS Control Tower).
+
+2. *Global Services*: Certain global AWS services, such as IAM and AWS Organizations, are exempt from the Region deny control because they don't have Regional endpoints.
+
+3. *SCP Evaluation*: If you have both landing zone and OU-level Regional deny controls active, you need to understand how they interact. Generally, when multiple SCPs apply to an account, the most restrictive policy takes effect.
+
+4. *Landing Zone Updates*: The Region deny feature becomes available when you update your AWS Control Tower landing zone version.
+
+5. *Existing Resources*: Enabling Regional deny doesn't delete resources that already exist in denied Regions; it only prevents new operations from being performed.
+
+6. *Gradual Implementation*: Consider implementing Regional deny gradually, starting with non-production OUs, to understand the impact on your workloads.
+
+=== Technical Limitations
+
+1. *aws:RequestedRegion Limitations*: The Regional deny control is subject to limitations of the `aws:RequestedRegion` global condition key.
+
+2. *SCP Limitations*: All general SCP limitations apply, including:
+   * SCPs don't affect service-linked roles
+   * SCPs don't directly restrict actions performed by the AWS account root user
+   * SCPs must be 5,120 bytes or smaller
+
+3. *Service Support*: Not all AWS services support Regional restrictions using SCPs. Review the AWS documentation for specific service limitations.
+
+== Best Practices
+
+1. *Start with an Audit*: Before implementing Regional deny, audit your current usage of AWS Regions to understand what resources might be affected.
+
+2. *Implement Gradually*: Start with non-critical OUs and gradually expand to more critical environments.
+
+3. *Document Exceptions*: Maintain documentation for any exceptions to your Regional policy.
+
+4. *Combine with Other Controls*: Use Regional deny alongside other AWS Control Tower controls, particularly data residency controls like:
+   * Disallow internet access for an Amazon VPC instance
+   * Disallow Amazon Virtual Private Network (VPN) connections
+   * Disallow cross-region networking for Amazon EC2, CloudFront, and Global Accelerator
+
+5. *Regular Review*: Periodically review your Regional deny settings to ensure they continue to meet your compliance requirements.
+
+6. *Testing Plan*: Develop a testing plan to verify that Regional deny is working as expected after implementation.
+
+7. *Emergency Access Plan*: Define procedures for emergency access if resources in denied Regions need to be accessed in exceptional circumstances.
+
+== Troubleshooting
+
+=== Common Issues
+
+1. *Access Denied Messages*: Users may receive "Access Denied" errors when attempting to use services in denied Regions. Verify this is expected behavior based on your configuration.
+
+2. *Unexpected Service Failures*: Some services that have cross-region dependencies might fail if they depend on Regions that are denied. Investigate service-specific requirements.
+
+3. *CI/CD Pipeline Failures*: Automated deployment pipelines might fail if they attempt to deploy to denied Regions. Update pipeline configurations to respect regional restrictions.
+
+=== Resolution Steps
+
+1. *Check SCP Application*: Verify the SCPs are correctly applied to the intended OUs and accounts.
+
+2. *Review CloudTrail*: Use AWS CloudTrail to review denied access attempts and understand which operations are being blocked.
+
+3. *Contact AWS Support*: For persistent issues that you cannot resolve, contact AWS Support for assistance.
+
+== FAQs
+
+*Q: Can I temporarily disable Regional deny for maintenance purposes?*
+
+A: Yes, you can disable the control from the AWS Control Tower console, but this should be done with caution and through a formal change management process.
+
+*Q: How does Regional deny interact with AWS Organizations' consolidated billing?*
+
+A: Consolidated billing functionality is provided by a global service and is not affected by Regional deny controls.
+
+*Q: Will enabling Regional deny impact existing workloads?*
+
+A: Regional deny will not delete existing resources in denied Regions but will prevent creating new resources or modifying existing ones.
+
+*Q: Can I use different Regional deny settings for different parts of my organization?*
+
+A: Yes, the OU-level Regional deny control allows you to apply different Regional restrictions to different OUs.
+
+*Q: How can I monitor compliance with Regional deny controls?*
+
+A: Use AWS CloudTrail to monitor API calls that are denied due to Regional restrictions, and consider setting up CloudWatch alarms for such events.
+
+By implementing AWS Control Tower Regional deny controls, organizations can enforce important data residency requirements, reduce their security risks, and ensure compliance with regulatory frameworks while maintaining operational efficiency.

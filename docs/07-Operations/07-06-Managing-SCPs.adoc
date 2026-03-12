@@ -1,0 +1,563 @@
+
+
+== Managing Service Control Policies
+
+=== Introduction to Service Control Policies (SCPs)
+
+Service Control Policies (SCPs) are a type of organization policy that you can use to manage permissions across your AWS Organization. SCPs offer central control over the maximum available permissions for all accounts in your organization, helping you ensure your accounts stay within your organization's access control guidelines.
+
+=== Best Practices for SCP Management
+
+SCPs should be managed through Landing Zone Accelerator (LZA) for several important reasons:
+
+* *Proper Governance*: Changes go through appropriate change management and security review processes
+* *Audit Trail*: All modifications are tracked with context and justification
+* *Version Control*: Changes are stored in code repositories, making rollbacks straightforward
+* *Consistent Deployment*: SCPs deploy consistently across targeted organizational units
+* *Impact Management*: Since SCPs can have broad impacts on Cloud Operations, they must be properly tracked and monitored
+
+=== LZA SCP Configuration Structure
+
+LZA joins policy definition with policy targets in a universal configuration structure:
+
+* Ensure organizational units that you want to target with SCPs already exist in your AWS Organization
+* Before creating a new SCP, check if an existing policy can be modified to achieve your objective
+* Policies are applied based on the `deploymentTargets` specification in the configuration
+
+=== Testing and Deployment Strategy
+
+1. *Test Thoroughly*: Always test new SCPs in a dedicated test organizational unit before broader deployment
+2. *Use Caution with Wildcards*: Be especially careful with `Deny` statements that use `*` in the action and resource values, as these can have unintended consequences
+3. *Follow Change Management*: Deploy your SCPs using proper change management and change control policies
+4. *Review for Conflicts*: Analyze existing SCPs to determine if there is any overlap before creating new policies
+5. *Monitor Implementation*: After deployment, monitor for any unexpected impacts on workloads or operations
+
+=== SCP Organization in LZA
+
+LZA defines SCPs in separate JSON files that you reference in the `policySets` section of the `iam-config.yaml` file. This modular approach provides several advantages:
+
+* *Logical Grouping*: Organize your SCPs into separate policy files grouped by purpose and common goal
+* *Maintainability*: One SCP per file makes maintenance and version control more manageable
+* *Reusability*: Common policy components can be templated and reused across multiple configurations
+
+==== Recommended SCP File Organization
+
+When organizing your SCPs, consider the following grouping strategies:
+
+1. *Functional Grouping*: Group SCPs based on their functional purpose (e.g., data-protection-scps.json, networking-scps.json)
+2. *Service-Based Grouping*: Organize policies around specific AWS services they govern (e.g., s3-security-scps.json, iam-governance-scps.json)
+3. *Risk Level Grouping*: Categorize policies based on the risk level they address (e.g., high-risk-prevention-scps.json, compliance-baseline-scps.json)
+
+Within your repository structure, consider maintaining SCPs in a dedicated directory with clear naming conventions:
+
+==== Example Directory Structure
+
+[shell]
+----
+/lza-config
+  /policies
+    /service-control-policies
+      /security
+        deny-public-s3.json
+        restrict-regions.json
+      /governance
+        require-resource-tags.json
+      /compliance
+        pci-dss-controls.json
+----
+
+=== Implementing SCPs in LZA: Step-by-Step Guide
+
+1. *Assess Requirements*: 
+   * Determine if an existing SCP already addresses your requirements or if a new SCP is needed
+   * Document the business and security justification for the policy
+   * Identify potential impacts on workloads and operations
+
+2. *Create Development Environment*:
+   * Create a new branch in the repository that is configured with your LZA UC deployment
+   * Follow your organization's branching strategy (e.g., feature/add-s3-encryption-scp)
+
+3. *Create the SCP JSON File*:
+   * Create a new service control policy JSON file in your policies directory
+   * Follow AWS SCP syntax and best practices
+   * Example structure:
+
+[json]
+----
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "RequireS3Encryption",
+      "Effect": "Deny",
+      "Action": [
+        "s3:PutObject"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringNotEquals": {
+          "s3:x-amz-server-side-encryption": "AES256"
+        }
+      }
+    }
+  ]
+}
+----
+
+4. *Configure in IAM Config*:
+   * Add a reference to your new SCP in the `policySets` section of the `iam-config.yaml` file
+   * Set `deploymentTargets` initially to test accounts using the `accounts` option
+   * Optionally limit regional deployment with `excludedRegions` parameter
+   * Example configuration:
+
+[yaml]
+----
+serviceControlPolicies:
+  - name: RequireS3EncryptionSCP
+    description: "Enforces encryption for all S3 buckets"
+    policy: path/to/require-s3-encryption.json
+    type: customerManaged
+    deploymentTargets:
+      accounts:
+        - Test
+      excludedAccounts: []
+    # Once tested, expand to organizational units:
+    # organizationalUnits:
+    #   - Workloads
+----
+
+5. *Test and Validate*:
+   * Run local validation if available: `yarn validate-config`
+   * Commit your changes to your new branch
+   * Create a merge/pull request that includes security review requirements
+   * Request peer review from your security and cloud operations teams
+
+6. *Deploy and Monitor*:
+   * After approval, merge the changes into the main branch to trigger deployment through the LZA pipeline
+   * Monitor the deployment logs to ensure successful application
+   * Test functionality in the test account(s) to verify the SCP works as expected
+   * Document any issues or unexpected behaviors
+
+7. *Expand Deployment*:
+   * After confirming the SCP is working as expected in test accounts, modify the configuration to apply to appropriate `organizationalUnits`
+   * Follow an incremental deployment approach, starting with non-critical OUs
+   * Create a new PR for this expanded deployment and follow your change management process
+
+8. *Rollback Process*:
+   * If an SCP produces unexpected results, you can use your version control system to revert to the last known good configuration
+   * The rollback procedure should include:
+     *** Identify the commit/version to roll back to
+     *** Create a new branch from that commit
+     *** Create an emergency PR to deploy the rollback
+     *** Deploy the rollback through your pipeline
+   * Document the issue and lessons learned for future SCP implementations
+
+=== SCP Version Control and Lifecycle Management
+
+Implement a versioning strategy for your SCPs to track changes over time:
+
+* Add version comments within your SCP JSON files
+* Maintain a changelog for major policy updates
+* Consider tagging significant policy releases in your repository
+* Review policies periodically to ensure they remain aligned with business requirements and security posture
+
+== Blacklisted AWS Services Management
+
+=== Default Service Restrictions
+
+LZA implements a security-first approach by blacklisting certain AWS services by default through SCPs. These services are typically restricted because they:
+
+* May not align with enterprise security requirements
+* Could introduce unmanaged resources
+* Might bypass established governance controls
+* Have limited integration with centralized logging and monitoring
+
+The default implementation uses a policy similar to:
+
+[json]
+----
+{
+  "Sid": "RiskyServices",
+  "Effect": "Deny",
+  "Action": [
+    "lightsail:*",
+    "gamelift:*",
+    "appflow:*"
+  ],
+  "Resource": "*",
+  "Condition": {
+    "ArnNotLike": {
+      "aws:PrincipalARN": [
+        "arn:aws:iam::*:role/AWSAccelerator*",
+        "arn:aws:iam::*:role/AWSControlTowerExecution"
+      ]
+    }
+  }
+}
+----
+
+This policy prevents the use of Amazon Lightsail, Amazon GameLift, and Amazon AppFlow services across the organization, with exceptions for LZA automation roles.
+
+=== Customizing Blacklisted Services
+
+You can establish your own customized list of restricted services by:
+
+1. *Creating a Service Restriction Policy*:
+   * Define a similar SCP JSON file with your own list of restricted services
+   * Consider grouping restrictions by risk level or compliance requirements
+   * Include clear documentation within the policy about why services are restricted
+
+2. *Configuring in Organization Config*:
+   * Add your custom restriction policy in the `serviceControlPolicies` section of the `organization-config.yaml` file
+   * Scope the policy application precisely using `deploymentTargets`
+
+3. *Implementing Exceptions*:
+   * Use IAM policy conditions to create exceptions for specific roles or use cases
+   * Document the exception process for teams that may need temporary access to restricted services
+   * Consider implementing time-bound exceptions using IAM condition keys
+
+=== Service Restriction Considerations
+
+When establishing service restrictions, consider these factors:
+
+* *Business Impact*: Assess the potential business impact before restricting services
+* *Alternative Services*: Provide guidance on approved alternative services that meet similar requirements
+* *Exception Process*: Create a clear exception process for legitimate business needs
+* *Communication Plan*: Develop a communication strategy to inform users about restricted services
+* *Monitoring*: Implement monitoring to detect attempts to use restricted services
+
+By strategically implementing service restrictions, you can significantly reduce your organizational attack surface while maintaining necessary business capabilities.
+
+== Advanced SCP Techniques
+
+=== Policy Size Limits and Strategies
+
+SCPs are subject to the same size limits as IAM policies - 5,120 characters. To work within these constraints:
+
+* Create multiple smaller SCPs rather than a single large one
+* Use wildcard permissions where appropriate but be cautious about overly broad deny statements
+* Focus on denying high-risk actions rather than attempting to enumerate all allowed actions
+* Use condition keys to refine policy scope without requiring additional statements
+
+=== Inheritance and Policy Combinations
+
+SCPs work through inheritance within the AWS Organization hierarchy:
+
+* Policies are combined from the organization root down through the OU structure
+* SCPs use a "deny by default" approach - only explicitly allowed actions are permitted
+* When multiple SCPs apply, the most restrictive combination takes effect
+* An explicit "Deny" in any applicable policy overrides any "Allow" statements
+
+This inheritance model requires careful planning:
+
+* Consider creating a baseline "Allow" policy at the organization root level
+* Apply more restrictive policies at lower levels in the hierarchy
+* Test policy combinations before implementation to avoid unintended restrictions
+
+=== Using SCPs with Other Policy Types
+
+SCPs work best as part of a comprehensive permission strategy that includes:
+
+* *Identity-based Policies*: Define permissions for specific IAM users and roles
+* *Resource-based Policies*: Control access to specific AWS resources
+* *Permission Boundaries*: Limit the maximum permissions an IAM entity can have
+* *Session Policies*: Limit permissions for temporary credentials
+
+Each policy type serves a different purpose:
+
+* SCPs define the maximum permissions available (guardrails)
+* IAM policies grant specific permissions within those guardrails
+* Resource policies control access to specific resources
+* Permission boundaries cap maximum permissions for specific entities
+
+=== Dynamic Condition Keys
+
+Leverage IAM condition keys to create dynamic, context-aware SCPs:
+
+* `aws:PrincipalOrgID` - Restrict actions to principals from your organization
+* `aws:SourceIp` - Restrict actions based on client IP address
+* `aws:RequestedRegion` - Restrict actions to specific AWS regions
+* `aws:ResourceTag` - Control actions based on resource tags
+
+Example of region restriction policy:
+
+[json]
+----
+{
+  "Version": "2012-10-17", 
+  "Statement": [
+    {
+      "Sid": "DenyAllOutsideApprovedRegions",
+      "Effect": "Deny",
+      "NotAction": [
+        "a4b:*",
+        "acm:*", 
+        "aws-portal:*",
+        "budgets:*",
+        "ce:*",
+        "chime:*",
+        "cloudfront:*",
+        "config:*",
+        "cur:*",
+        "directconnect:*",
+        "ec2:DescribeRegions",
+        "ec2:DescribeTransitGateways",
+        "ec2:DescribeVpnGateways",
+        "fms:*",
+        "globalaccelerator:*",
+        "health:*",
+        "iam:*",
+        "importexport:*",
+        "kms:*",
+        "networkmanager:*",
+        "organizations:*",
+        "pricing:*",
+        "route53:*",
+        "route53domains:*",
+        "s3:GetAccountPublicAccessBlock",
+        "s3:ListAllMyBuckets",
+        "s3:PutAccountPublicAccessBlock",
+        "shield:*",
+        "sts:*",
+        "support:*",
+        "trustedadvisor:*",
+        "waf-regional:*",
+        "waf:*",
+        "wafv2:*",
+        "wellarchitected:*"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringNotEquals": {
+          "aws:RequestedRegion": [
+            "us-east-1",
+            "us-east-2", 
+            "us-west-2"
+          ]
+        }
+      }
+    }
+  ]
+}
+----
+
+== SCP Troubleshooting Guide
+
+=== Common Issues and Resolution Strategies
+
+1. *Permission Denied Issues*:
+   * **Symptom**: Users report inability to perform actions that should be allowed
+   * **Investigation Steps**:
+     1. Identify all SCPs applied to the account (organizational hierarchy)
+     2. Check for explicit Deny statements that might be overriding Allow statements
+     3. Verify identity-based policies include the necessary permissions
+   * **Resolution**: Modify SCPs to explicitly allow the required actions or add exceptions for specific roles
+
+2. *Policy Size Limit Exceeded*:
+   * **Symptom**: SCP deployment fails with a size limit error
+   * **Resolution**: Split the policy into multiple smaller SCPs with more focused scope
+
+3. *Unintended Policy Effects*:
+   * **Symptom**: Critical services or operations unexpectedly stop working
+   * **Investigation**: Analyze CloudTrail logs for denied API calls
+   * **Resolution**: Implement temporary emergency exceptions while developing a permanent fix
+
+=== SCP Testing and Validation
+
+Before deploying SCPs to production environments:
+
+1. *Create a Policy Sandbox*:
+   * Set up a dedicated test OU with representative test accounts
+   * Deploy candidate SCPs to this sandbox environment first
+
+2. *Perform Automated Testing*:
+   * Create automated scripts that attempt to perform various actions
+   * Verify both positive tests (actions that should succeed) and negative tests (actions that should be denied)
+   * Use CloudTrail logs to verify the expected effect of policies
+
+3. *Document Test Results*:
+   * Maintain a test matrix showing which actions were tested and their results
+   * Include this documentation with your change request for the SCP
+
+=== Emergency Response Plan
+
+Have a predefined process for addressing emergency SCP issues:
+
+1. *Detection*: Establish monitoring to quickly identify when critical operations are being blocked
+2. *Assessment*: Determine if the issue is related to SCPs and identify the specific policy causing problems
+3. *Mitigation Options*:
+   * Rollback to previous SCP version
+   * Add temporary exceptions for affected roles/accounts
+   * Move affected accounts to an OU with less restrictive policies
+4. *Post-Incident Analysis*: Document the root cause and implement process improvements to prevent recurrence
+
+== SCP Templates for Common Use Cases
+
+=== Data Protection SCPs
+
+[json]
+----
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "RequireS3Encryption",
+      "Effect": "Deny",
+      "Action": "s3:PutObject",
+      "Resource": "*",
+      "Condition": {
+        "StringNotEquals": {
+          "s3:x-amz-server-side-encryption": ["AES256", "aws:kms"]
+        }
+      }
+    },
+    {
+      "Sid": "DenyPublicS3Buckets",
+      "Effect": "Deny",
+      "Action": [
+        "s3:PutBucketPublicAccessBlock",
+        "s3:PutBucketPolicy",
+        "s3:PutBucketAcl"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "s3:PublicAccessBlockConfiguration": "false"
+        }
+      }
+    }
+  ]
+}
+----
+
+=== Resource Protection SCPs
+
+[json]
+----
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "RequireResourceTags",
+      "Effect": "Deny",
+      "Action": [
+        "ec2:RunInstances",
+        "ec2:CreateVolume"
+      ],
+      "Resource": [
+        "arn:aws:ec2:*:*:instance/*",
+        "arn:aws:ec2:*:*:volume/*"
+      ],
+      "Condition": {
+        "StringNotLike": {
+          "aws:RequestTag/Environment": ["Dev", "Test", "Prod"],
+          "aws:RequestTag/Owner": "*"
+        }
+      }
+    }
+  ]
+}
+----
+
+These templates provide starting points for common security controls that you can adapt to your organization's specific requirements.
+
+== SCP Best Practices Summary
+
+=== Policy Development Lifecycle
+
+Implement a structured lifecycle for SCP development and management:
+
+1. *Requirements Gathering*: Document business and security requirements for the policy
+2. *Policy Design*: Create policy drafts with clear documentation of intent
+3. *Peer Review*: Have security and cloud operations teams review the policy
+4. *Testing*: Deploy to test environment and validate behavior
+5. *Phased Rollout*: Deploy to production incrementally, starting with low-impact areas
+6. *Monitoring*: Monitor for unintended consequences
+7. *Periodic Review*: Regularly review policies to ensure they remain relevant and effective
+
+=== SCP Documentation Standards
+
+Document each SCP thoroughly with:
+
+* Purpose and business justification
+* Expected behavior
+* Target accounts and organizational units
+* Known limitations or exceptions
+* Contact information for policy owner
+* Date of last review
+* Version history
+
+Example documentation header format for SCP JSON files:
+[json]
+----
+{
+  "metadata": {
+    "name": "RequireS3Encryption",
+    "version": "1.2",
+    "lastReviewed": "2023-09-15",
+    "owner": "Security Team",
+    "contact": "security@example.com",
+    "purpose": "Enforce encryption for all S3 objects",
+    "notes": "Modified to include both AES256 and KMS encryption options"
+  },
+  "Version": "2012-10-17",
+  "Statement": [
+    // Policy statements here
+  ]
+}
+----
+
+=== Integrating SCPs with AWS Control Tower
+
+When using LZA with AWS Control Tower, consider these additional factors:
+
+1. *Control Tower Guardrails*: 
+   * Control Tower implements its own guardrails as SCPs
+   * Review these existing guardrails before creating custom SCPs to avoid duplication
+   * Ensure your custom SCPs don't conflict with mandatory Control Tower guardrails
+
+2. *SCP Management Strategy*:
+   * Use Control Tower guardrails for common compliance requirements
+   * Use custom SCPs through LZA for organization-specific requirements
+   * Document which controls are implemented via which mechanism
+
+3. *Account Registration Process*:
+   * Account registration in Control Tower will automatically apply Control Tower SCPs
+   * Ensure your custom SCPs deployed via LZA are also applied to new accounts
+
+4. *SCP Prioritization*:
+   * Control Tower guardrails take priority if there's a conflict with custom SCPs
+   * Plan your custom SCPs as complementary to Control Tower guardrails
+
+=== Creating an SCP Center of Excellence
+
+For large organizations, consider establishing an SCP Center of Excellence (CoE):
+
+* *Dedicated Team*: Assign specific individuals responsibility for SCP management
+* *Governance Process*: Create a formal process for requesting, reviewing, and approving SCPs
+* *Knowledge Repository*: Maintain comprehensive documentation on all SCPs
+* *Training*: Provide training to teams on how SCPs impact their operations
+* *Feedback Loop*: Establish channels for receiving and addressing feedback on SCP impacts
+
+=== Measuring SCP Effectiveness
+
+Develop metrics to measure the effectiveness of your SCPs:
+
+* Track the number of denied actions in CloudTrail logs
+* Monitor compliance with security standards before and after SCP implementation
+* Collect feedback from application teams on SCP impacts
+* Perform periodic security assessments to verify SCPs are achieving intended outcomes
+
+== Conclusion
+
+Service Control Policies are powerful tools for implementing guardrails across your AWS organization. By following the best practices outlined in this document and managing SCPs through the Landing Zone Accelerator, you can ensure consistent security controls while maintaining the flexibility needed for business operations.
+
+When implemented properly, SCPs provide:
+
+* Consistent security guardrails across all accounts
+* Clear boundaries for developers and operators
+* Reduced risk of misconfigurations and security incidents
+* Simplified compliance with organizational policies
+
+Remember that SCPs work best as part of a defense-in-depth strategy that includes other controls such as IAM policies, resource policies, and continuous compliance monitoring. Regular reviews and updates to your SCP strategy are essential as your organization's requirements evolve and as AWS introduces new services and features.
+

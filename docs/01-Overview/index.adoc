@@ -1,0 +1,574 @@
+[#top]
+= LZA Universal Configuration Overview
+:toc:
+:toclevels: 3
+:doctype: book
+:icons: font
+:iconfont-remote!:
+:iconfont-name: icons
+
+== Introduction
+
+The Landing Zone Accelerator on AWS (LZA) Universal Configuration provides an opinionated approach to configuring AWS landing zones, based on the link:https://docs.aws.amazon.com/wellarchitected/latest/framework/welcome.html[AWS Well-Architected Framework], link:https://docs.aws.amazon.com/prescriptive-guidance/latest/security-reference-architecture/welcome.html[AWS Security Reference Architecture], and extensive AWS Professional Services experience working with customers, and industry best practices.
+
+This configuration establishes a secure, compliant, and efficient multi-account AWS environment that serves as a foundation for your organization's cloud journey. Rather than starting from a blank slate, the Universal Config provides a pre-built set of configurations that incorporate AWS security best practices, governance controls, and operational excellence principles.
+
+The LZA Universal Configuration:
+
+* Simplifies the complex process of establishing a well-architected landing zone by providing ready-to-deploy configuration files
+* Implements proven patterns for account structure, security controls, and operational tools
+* Leverages AWS Control Tower as a foundation and enhances it with additional security and governance capabilities
+
+[IMPORTANT]
+This solution will not, by itself, make you compliant. It provides the foundational infrastructure from which additional complementary solutions can be integrated. The information contained in this solution implementation guide is not exhaustive. You must review, evaluate, assess, and approve the solution in compliance with your organization’s particular security features, tools, and configurations. It is the sole responsibility of you and your organization to determine which regulatory requirements are applicable and to ensure that you comply with all requirements. Although this solution discusses both the technical and administrative requirements, this solution does not help you comply with the non-technical administrative requirements.
+
+
+While the LZA Universal Configuration provides a strong starting point, you should review and modify these settings to align with your organization's specific use cases, security requirements, and operational model, allowing you to adapt the solution to your unique needs while maintaining a strong security posture.
+
+The following sections provide a high-level overview of each configuration component, explaining the default settings, implementation considerations, and usage guidelines to help you understand the foundational elements of the LZA Universal Configuration.
+
+For each major configuration area, separate detailed documentation pages are available that:
+
+* Explain the specific design decisions behind configuration choices
+* Outline security and operational implications you should consider
+* Provide guidance for customizing settings to meet your specific requirements
+* Include examples of common modification scenarios and best practices
+
+We recommend reviewing both this overview document to understand the comprehensive solution design, as well as the detailed documentation pages before making significant modifications to the default configuration. This approach will help ensure your landing zone implementation maintains security, operational excellence, and alignment with AWS best practices while adapting to your organization's needs.
+
+
+== Overview of LZA Universal Configuration Settings
+
+=== Replacement Settings Configuration
+
+The `replacements-config.yaml` file provides environment-specific variable replacements for the Landing Zone Accelerator deployment, allowing customization while maintaining a consistent configuration structure.
+
+==== Key Replacement Settings
+
+Global Solution Identifier:
+
+** AcceleratorPrefix: "AWSAccelerator" - Used for naming resources
+
+Regional Settings:
+
+** HomeRegion: "us-east-1" - Primary deployment region
+
+Notification Configurations:
+
+** Budget notification email address
+** Security notifications with three severity tiers:
+*** SecurityHigh - Critical security alerts
+*** SecurityMedium - Important security notifications
+*** SecurityLow - Informational security notifications
+
+[discrete]
+==== Implementation Notes
+Template values must be replaced with organization-specific values
+
+** All email addresses must be updated before deployment
+** Region selection should align with organizational requirements
+** Additional commented replacements are available for future use
+** Values are consistently referenced across all configuration files
+
+[discrete]
+==== Usage Guidelines
+
+* Update all placeholder values before deployment
+* Use valid email addresses that will be monitored
+* Configure notifications based on organizational responsibilities
+* Follow a consistent naming convention if customizing the accelerator prefix
+* Document any changes to default replacement values
+
+=== Global Configuration
+* AWS Control Tower and select link:https://docs.aws.amazon.com/controlcatalog/latest/userguide/what-is-controlcatalog.html[controls] enabled with AWS Organizations
+* AWS Identity Center enabled for centralized access management with SharedServices account configured as the delegated administrator for the organization
+* Separate SNS topics created for Low, Medium, and High security alerts with separate e-mail notification to the email addresses you indicate
+
+
+* AWS Backup Vaults created for each AWS account in the Infrastructure and Workloads AWS Organization units
+* No additional CloudTrails since AWS Control Tower sets up an organization-level CloudTrail trail
+- Provide some background on what this trail is and what options Control Tower sets up by default.
+* CloudWatch logging for AWS Systems Manager Session Manager enabled in each AWS account.
+
+* S3 Access Logs - aws-accelerator-s3-access-logs-`{ACCOUNT_ID}`-`{REGION}`
+- Transitions access logs to Glacier Instant Retrieval after 365 days
+** Expires current version of logs after 1000 days
+** Deletes previous versions of logs after 1000 days
+
+* Central Log Bucket - aws-accelerator-central-logs-`{ACCOUNT_ID}`-`{REGION}`
+- Transitions central log bucket objects to Glacier Instant Retrieval after 365 days
+** Expires current version of logs after 1000 days
+** Deletes previous versions of logs after 1000 days
+
+* Elastic Load Balancer (ELB) Access Logs - aws-accelerator-elb-access-logs-`{ACCOUNT_ID}`-`{REGION}`
+- Transitions ELB access logs to Glacier Instant Retrieval after 365 days
+** Expires current version of logs after 1000 days
+** Deletes previous versions of logs after 1000 days
+
+* AWS Budgets
+- Defines a new monthly budget with a default $2,000 limit and sets up notifications to an email address you specify for 50%, 75%, 90%, and 100% of budget threshold exceeded.
+
+
+=== Organizations Configuration
+
+The `organization-config.yaml` file defines the foundational structure of your AWS Organization, establishing a well-organized hierarchy of Organizational Units (OUs), enforcing governance through Service Control Policies (SCPs), and implementing standardized tagging and backup practices.
+
+==== Organization Management Features
+
+The LZA Universal Configuration implements several organization-wide management features:
+
+* New Account Quarantine: Automatically applies restrictive policies to newly created accounts until the LZA pipeline has properly configured them, preventing premature resource provisioning or security gaps
+* Standardized SCPs: Implements graduated security controls across different organizational units
+* Tag Governance: Enforces consistent tagging standards for resource management and backup operations
+
+
+==== Organization Units Structure
+
+The LZA Universal Configuration creates a purpose-built organizational structure that provides clear separation of accounts according to their function and compliance requirements:
+
+* Security OU
+** Purpose: Houses security-focused accounts that provide centralized security monitoring, logging, and compliance functions
+** Contains: Log Archive and Audit accounts
+** Characteristics: Highly restricted access, enhanced security controls, centralized security services
+
+* Infrastructure OU
+** Purpose: Contains accounts managing shared infrastructure and platform services used by workloads
+** Contains: Network, Shared Services, and Perimeter accounts
+** Characteristics: Controlled by infrastructure teams, hosts shared services like DNS, directory services, and centralized network components
+
+* Workloads OU
+** Purpose: Parent OU for all business application accounts organized by environment lifecycle
+** Contains: Three nested OUs representing the application lifecycle
+*** Sandbox OU: Provides isolated environments for experimentation and learning
+*** Dev OU: Development environment for building and initial testing
+*** Test OU: Testing/QA environment for formal validation
+*** Prod OU: Production environment for business operations
+** Characteristics: Differentiated controls based on environment criticality, with progressively stricter policies moving from Dev to Prod
+
+* Suspended OU
+** Purpose: Temporary location for decommissioned or quarantined accounts
+** Characteristics: Highly restricted access with deny-by-default policies, used during account deprovisioning or security incident response
+
+
+===== Tag Policies
+Tag policies for use in conjunction with AWS Backup Policies help ensure consistent application of tags required for creation of Backups for the Infrastructure and Workload OUs: Both policies apply primarily to resources within these Organizational Units.
+
+[discrete]
+===== Default Universal Config Tag Policies
+
+[cols="1,2,2", options="header"]
+|===
+|Tag Key |Permitted Values |Applies To
+
+|BackupPlan
+|"Hourly", "Daily", "Weekly", "Monthly"
+|EC2 instances, EC2 volumes, All DynamoDB resources, All Elastic File System (EFS) resources, FSx file systems, Storage Gateway gateways
+
+|BackupPlan
+|"Continuous", "Hourly", "Daily", "Weekly", "Monthly"
+|S3 buckets
+|===
+
+[discrete]
+=== Implementation Notes
+
+* These policies enforce tag value compliance but do not require resources to have the BackupPlan tag
+* When the BackupPlan tag is applied to any covered resource, it must use one of the permitted values for that resource type
+* S3 buckets have an additional "Continuous" option due to S3's support for continuous backup capabilities
+* These standardized values align with AWS Backup frequency options and support automated backup orchestration
+
+** NOTE:  This doesn't prevent these types of resources from being created with the BackupPlan tag missing.
+
+
+[discrete]
+=== Usage Guidelines
+
+* Apply the BackupPlan tag during resource creation to ensure proper backup categorization
+* Select the appropriate backup frequency based on the data criticality and recovery point objectives
+* Resources without a BackupPlan tag will not automatically participate in organized backup processes
+* Consider implementing complementary SCPs if mandatory tagging is required
+[IMPORTANT]
+These tag policies work in conjunction with AWS Backup plans that correspond to each of the defined backup frequencies. Ensure that appropriate backup plans are configured to honor these tag values.
+
+==== Backup Policy
+The Universal Config implements AWS Backup policies that automatically back up resources based on the tags defined in the Tag Policies section. The backup policies create a comprehensive backup strategy with multiple frequency options to accommodate different recovery point objectives.
+
+[discrete]
+===== Default Universal Config Backup Plans
+
+[cols="1,1,2,2", options="header"]
+|===
+|Plan Name |Frequency |Retention |Applies To
+
+|Continuous_Plan
+|Continuous
+|35 days
+|Resources tagged with BackupPlan=Continuous (S3 buckets only)
+
+|Hourly_Plan
+|Every hour (at 5 minutes past)
+|365 days (30 days in standard storage, then cold storage)
+|Resources tagged with BackupPlan=Hourly
+
+|Daily_Plan
+|Daily at 5:00 AM
+|365 days (30 days in standard storage, then cold storage)
+|Resources tagged with BackupPlan=Daily
+
+|Weekly_Plan
+|Weekly on Sundays at 5:00 AM
+|365 days (30 days in standard storage, then cold storage)
+|Resources tagged with BackupPlan=Weekly
+
+|Monthly_Plan
+|Monthly on the 1st at 5:00 AM
+|730 days (60 days in standard storage, then cold storage)
+|Resources tagged with BackupPlan=Monthly
+|===
+
+[discrete]
+===== Implementation Notes
+
+* All backup plans are deployed in the organization's home region
+* Backups are stored in backup vaults named `ACCELERATOR_PREFIX}`-BackupVault within each LZA enabled AWS account and region.
+* Each plan selects resources based on the corresponding BackupPlan tag value
+* Windows VSS (Volume Shadow Copy Service) is enabled for all EC2 backups to ensure application consistency
+* Continuous backup provides point-in-time recovery with a shorter retention period (35 days)
+* Longer-term backups leverage AWS Backup's cold storage tier to optimize costs
+* Backups are created using the "Backup-Role" IAM role in each account
+
+[discrete]
+===== Usage Guidelines
+
+* Choose the appropriate backup frequency based on your workload's recovery point objectives (RPO)
+* Continuous backups are ideal for databases and other systems requiring point-in-time recovery
+* For cost optimization, consider using less frequent backup plans for non-critical resources
+* Monthly backups have extended retention (2 years) for long-term archival purposes
+* Resources without the BackupPlan tag will not be backed up by these policies
+* For critical systems, consider using multiple backup frequencies (e.g., hourly + weekly)
+* Monitor backup success rates and test recovery procedures regularly
+
+[IMPORTANT]
+These backup policies work in conjunction with the tag policies defined earlier. To enable backups for a resource, simply apply the BackupPlan tag with one of the permitted values. The corresponding backup plan will automatically include the resource in its scheduled backup operations.
+
+
+===== Service Control Policies
+
+Service Control Policies (SCPs) serve as permission guardrails, establishing preventative controls that limit actions within accounts regardless of local IAM permissions. The LZA Universal Configuration implements a tiered approach to SCPs:
+
+[discrete]
+===== SCP Strategy and Implementation
+
+Defense-in-Depth: Multiple overlapping SCPs provide layered protection
+Preventative Controls: SCPs block unauthorized actions before they occur
+Centralized Administration: Changes to governance policies are managed through the LZA pipeline
+Least-Privilege Principle: SCPs enforce minimum necessary permissions based on account function
+
+[cols="1,2,2", options="header"]
+|===
+|Policy Name |Applied To |Key Protections
+
+|guardrails-1.json
+|Infrastructure, Sandbox, Security OUs
+|Focuses on data protection through enforced encryption and protecting the LZA infrastructure itself:
+
+- Encrypts sensitive data by preventing unencrypted resource creation for EBS, EFS, RDS, and Aurora
+
+- Protects LZA infrastructure by denying unauthorized access to configuration buckets, Lambda functions, and SNS topics
+
+- Prevents unauthorized modifications to KMS keys and CloudWatch logging configurations
+|guardrails-2.json
+|Infrastructure, Sandbox, Security OUs
+|Focuses on identity, security services protection, and LZA resource protection:
+
+- Protects identity settings by preventing changes to IAM password policies and preventing use of the root account
+
+- Centralizes security service management by restricting Security Hub, GuardDuty, and Macie configuration to LZA processes
+
+- Protects LZA-deployed resources like CloudFormation stacks and SSM parameters
+
+- Prevents the creation of IAM users, enforcing federated access through AWS IAM Identity Center
+|guardrails-3.json
+|Infrastructure OU only
+|Focuses on network protection and preventing high-risk services:
+
+- Protects core network infrastructure by preventing unauthorized changes to VPC components, Transit Gateways, and Route Tables
+
+- Prevents creation of security groups with unrestricted internet access (0.0.0.0/0) for inbound traffic
+
+- Blocks high-risk or consumer-oriented services like Lightsail, GameLift, and AppFlow that bypass enterprise controls
+
+- Restricts AWS Marketplace transactions to prevent unauthorized software procurement and billing
+|quarantine.json
+|Applied automatically to new accounts
+|Provides temporary protection of new accounts:
+
+- Prevents almost all service actions until the account is fully provisioned by LZA
+
+- Automatically applied upon account creation if quarantineNewAccounts is enabled
+
+- Automatically removed by LZA once the account is properly configured
+|===
+
+[discrete]
+===== Implementation Considerations
+
+* SCPs don't grant permissions; they only limit maximum available permissions
+* Actions denied by SCPs cannot be allowed by any IAM policy
+* The Root OU (organization management account) is intentionally excluded from SCPs to prevent lockout scenarios
+* SCPs are designed to allow LZA pipeline automation while preventing manual changes to protected resources
+
+=== Accounts Configuration
+
+The `accounts-config.yaml` file defines the AWS accounts in place within the AWS Organization.  The LZA solution requires certain mandatory accounts to be defined.  All AWS accounts in the AWS organization must be specified for all Organizational Units unless the organizational unit is specifically excluded in the `organizations-config.yaml`.
+
+==== Key Account Settings
+
+Mandatory Accounts - AWS Control Tower required accounts:
+
+** Management Account - Central administration of the AWS Organization
+** Log Archive Account - Centralized logging repository in the Security OU
+** Audit Account - Security monitoring and compliance in the Security OU
+
+Core Infrastructure Accounts:
+
+** Shared Services Account - Central IT services in the Infrastructure OU
+** Network Account - Network resources and connectivity in the Infrastructure OU
+** Perimeter Account - Network security and perimeter controls in the Infrastructure OU with internet gateway.
+
+Organizational Units:
+
+** Security OU - Contains security-focused accounts
+** Infrastructure OU - Contains core infrastructure accounts
+** Workloads OU - Contains application and workload accounts (Dev, Test, Prod)
+** Sandbox OU - Contains experimental and development environments
+** Suspended OU - Contains decommissioned or quarantined accounts
+
+[discrete]
+
+==== Implementation Notes
+
+* All accounts follow a standardized configuration model
+* Email addresses must be unique across the organization
+* Quarantine mechanism for new accounts ensures proper configuration before use
+[discrete]
+==== Usage Guidelines
+
+* New accounts should follow the established naming convention
+* Each account must have a unique and monitored email address
+* All accounts are automatically enrolled in AWS Control Tower
+* Follow account creation procedures for adding new accounts to the organization
+
+=== IAM Configuration
+
+The `iam-config.yaml` file defines the IAM resources and permissions model used throughout the AWS Organization, establishing a secure identity foundation that follows the principle of least privilege.
+
+==== Key IAM Settings
+
+IAM Policies - Custom policies for specific use cases:
+
+* End-User-Policy - A sample permission boundary policy that can be used to limit the maximum permissions that development teams can grant when creating their own roles.  This policy is attached to the `{AcceleratorPrefix}`
+* Default-SSM-S3-Policy - Allows EC2 instances to access resources required for SSM management
+
+
+IAM Roles - Pre-configured roles for specific functions:
+
+* `{AcceleratorPrefix}`-Backup-Role - Created in all accounts to support AWS Backup operations and used by the AWS Backup Policy defined in `organizations-config.yaml`.
+
+[discrete]
+==== Implementation Notes
+
+* AWS managed policies should leveraged where appropriate
+* Custom policies should be created only when necessary
+* Roles are consistently deployed across all accounts except the management account.
+[discrete]
+
+==== Usage Guidelines
+
+* Use the pre-defined roles for standard functions
+* Avoid creating custom IAM roles where standard roles are available
+* IAM policies should be reviewed regularly for unnecessary permissions
+* EC2 instances should always use the provided instance profiles, unless custom permissions are required.
+* Follow the principle of least privilege when creating custom roles
+
+=== Security Configuration
+
+The `security-config.yaml` file configures AWS security services and establishes security controls across the AWS Organization, providing a comprehensive security posture aligned with industry best practices.
+
+==== Key Security Settings
+
+Centralized Security Services - Managed through the Audit account:
+
+* Amazon GuardDuty - Enabled with S3 and EKS protection, exports findings to central S3 bucket
+* AWS Config - Enabled with extensive rule sets for compliance
+* Amazon Macie - Configured for sensitive data discovery
+* AWS Security Hub - Configured to consolidate findings from AWS Control Tower, AWS Config, Amazon GuardDuty, AWS Firewall Manager, AWS IAM Access Analyzer, Amazon Inspector, Amazon Macie, AWS Health, Amazon Route 53 Resolver DNS Firewall,  and AWS Systems Manager Patch Manager.
+
+AWS Security Hub Security Standards:
+
+** AWS Foundational Security Best Practices
+** NIST Special Publication 800-53 Revision 5
+** CIS AWS Foundations Benchmark v3.0.0
+
+Data Protection:
+
+** Default EBS volume encryption enabled
+** S3 public access blocks configured
+** Automated remediation for unencrypted resources
+
+Config Rules - Comprehensive set of AWS Config rules:
+
+** Security configuration validation rules
+** Resource configuration monitoring
+** Backup validation rules
+** Infrastructure security rules
+
+[discrete]
+==== Implementation Notes
+
+* Security services delegate administration to the Audit account
+* Automated remediation workflows are established for critical security findings
+* EC2 instances automatically receive required instance profiles
+* ELB logging is automatically enabled
+* Security findings are consolidated in Security Hub
+* GuardDuty findings are exported to S3 every six hours
+
+=== Network Configuration
+
+The `network-config.yaml` file defines the network architecture for your AWS Organization. The LZA Universal Configuration offers two networking models that share the same core infrastructure but differ fundamentally in workload network deployment and management approaches.
+
+==== Shared Network Infrastructure Components
+
+Both networking architectures implement a common set of foundational network services that provide centralized security, cost optimization, and operational efficiency:
+
+*Core Infrastructure VPCs:*
+
+* *Inspection VPC* - Houses AWS Network Firewall for centralized traffic inspection of both east-west (VPC-to-VPC) and north-south (internet) traffic
+* *Ingress VPC* - Manages inbound traffic from the internet through internet gateways in the Perimeter account
+* *Egress VPC* - Controls outbound internet traffic through centralized NAT Gateways in the Perimeter account
+* *Endpoints VPC* - Provides centralized AWS service endpoints for private API access without internet connectivity
+* *Shared Services VPC* - Hosts common organizational services like directory services and monitoring tools
+
+*Centralized Network Services:*
+
+* *AWS Transit Gateway* - Serves as the central hub for all network connectivity, routing traffic between VPCs and on-premises networks
+* *AWS Network Firewall* - Provides stateful firewall capabilities with Suricata-compatible rules for comprehensive traffic inspection
+* *AWS IPAM (IP Address Manager)* - Implements hierarchical IP address management with global, regional, and purpose-specific pools
+* *VPC Flow Logs* - Captures detailed network traffic information for security monitoring and troubleshooting
+
+==== Hub and Spoke Architecture (Default)
+
+The Hub and Spoke model is the default and recommended networking approach, creating individual VPCs for each workload account using standardized templates.
+
+*Key Features:*
+
+* *Individual Account VPCs* - Each workload account receives its own dedicated VPC based on standardized VPC templates
+* *Distributed IP Management* - IPAM pools are shared with Organizational Units (OUs), allowing accounts to allocate addresses from their environment-specific pool
+* *VPC Templates* - Standardized VPC configurations automatically deployed to accounts based on OU membership
+* *Strong Isolation* - Each workload account owns and manages its VPC resources with clear resource boundaries
+
+*Implementation Approach:*
+
+** VPC templates target entire Organizational Units (Dev, Test, Prod)
+** Transit Gateway shared with Infrastructure and all Workloads OUs  
+** IPAM pools shared directly with respective workload OUs for distributed allocation
+** Each account creates its own Transit Gateway attachment
+
+*Benefits:*
+
+** Clear ownership boundaries aligned with account boundaries
+** Enhanced security through account-level isolation
+** Operational flexibility with teams controlling their VPC configurations
+** Scalable through automated VPC template deployment
+** Suitable for DevOps operating models with distributed team responsibilities
+
+==== Shared VPC Architecture (Specialized Use Case)
+
+The Shared VPC model provides an alternative approach using centralized VPCs with subnet sharing for workload accounts requiring maximum IP efficiency and centralized network control.
+
+*Key Features:*
+
+* *Centralized VPC Management* - Three dedicated workload VPCs (shared-dev, shared-test, shared-prod) created in the Network account
+* *Subnet Sharing via RAM* - Specific subnets shared with workload accounts using AWS Resource Access Manager
+* *Environment Segregation* - Separate shared VPCs for different environments while maintaining central control
+* *Efficient IP Utilization* - Better utilization of IP address space through shared infrastructure
+
+*Implementation Approach:*
+
+** All workload VPCs managed centrally in the Network account
+** Transit Gateway shared only with Infrastructure OU (more restricted sharing)
+** IPAM pools shared exclusively with the Network account for centralized allocation  
+** Subnet sharing configured through `shareTargets` specifications on individual subnets
+** Network team maintains full control of routing, NACLs, and VPC-level configurations
+
+*Benefits:*
+
+** Maximum IP address efficiency through shared infrastructure
+** Centralized network administration and control
+** Simplified connectivity between workloads in the same environment
+** Reduced management overhead with fewer VPCs
+** Cost optimization for intra-VPC communications
+
+==== Architecture Selection Considerations
+
+*Choose Hub and Spoke Architecture when:*
+
+** Organization operates with distributed teams requiring clear ownership boundaries
+** DevOps operating model with preference for account-level network autonomy
+** Strong isolation requirements between different workloads or business units
+** Moderate IP address availability with room for individual account allocations
+** Teams prefer to manage their own VPC-level configurations within security guidelines
+
+*Choose Shared VPC Architecture when:*
+
+** Severe IP address constraints require maximum efficiency in address utilization
+** Strong preference for centralized network operations and control
+** Workloads have high levels of inter-connectivity within the same environment
+** Organization has dedicated network teams managing all infrastructure
+** Cost optimization through shared VPC communication patterns is a priority
+
+Both architectures provide enterprise-grade security, scalability, and operational capabilities while serving different organizational operating models and technical requirements.
+
+==== Key Network Settings
+
+The network configuration implements several critical settings that affect security, connectivity, and operational efficiency. While both architectures share common foundational settings, they differ in sharing and allocation strategies:
+
+*Common Settings Across Both Architectures:*
+
+* *Default VPC Management* - Default VPCs deleted from all accounts for security (`delete: true`)
+* *Transit Gateway Base Configuration* - ASN 64512, DNS support enabled, VPN ECMP support enabled
+* *Network Firewall Rules* - Stateful rule groups using Suricata-compatible format in `firewall-rules/rules.txt`
+* *VPC Flow Logs* - Enhanced logging with 30-day CloudWatch retention and S3 forwarding
+* *Core Infrastructure VPCs* - Same set of inspection, ingress, egress, endpoints, and shared services VPCs
+
+*Hub and Spoke Specific Settings:*
+
+* *Transit Gateway Sharing* - Shared with Infrastructure OU and all Workloads OUs (Dev, Test, Prod)
+* *IPAM Pool Sharing* - Environment-specific pools shared directly with corresponding OUs
+** Dev pool → Workloads/Dev OU
+** Test pool → Workloads/Test OU  
+** Prod pool → Workloads/Prod OU
+* *VPC Templates* - Standardized templates deployed via `deploymentTargets` to entire OUs
+* *Resource Allocation* - Distributed allocation model where accounts manage their own VPC resources
+
+*Shared VPC Specific Settings:*
+
+* *Transit Gateway Sharing* - Shared only with Infrastructure OU (more restrictive)
+* *IPAM Pool Sharing* - All workload pools shared exclusively with Network account for centralized management
+* *VPC Creation* - Three dedicated shared VPCs (dev, test, prod) created in Network account
+* *Subnet Sharing* - Individual subnets configured with `shareTargets` to specify which accounts can access them
+* *Resource Management* - Centralized allocation model where Network account manages all VPC infrastructure
+
+*Network Firewall Configuration:*
+
+** Centralized deployment in dedicated inspection VPC
+** Policy management through LZA with organization-wide deployment
+** Configurable logging to CloudWatch Logs (automatically forwarded to S3)
+** Suricata-compatible rules with environment-specific variables
+
+*Security and Monitoring:*
+
+** VPC Flow Logs capture all traffic types for comprehensive analysis
+** Enhanced field collection for detailed traffic analysis and security monitoring  
+** Integration with central logging architecture for compliance and long-term retention
+** Consistent security controls across both networking models

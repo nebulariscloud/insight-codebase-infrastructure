@@ -1,0 +1,254 @@
+= Managing EC2 Instances at Scale with LZA
+
+== Introduction to EC2 Instance Management
+
+Amazon EC2 instances are often a critical part of enterprise workloads in AWS. LZA provides capabilities to standardize EC2 instance management, security, and operations across your AWS organization through consistent IAM roles, SSM configuration, and automation runbooks.
+
+== Configuring AWS Systems Manager Session Manager
+
+=== Overview
+
+AWS Systems Manager Session Manager provides secure shell access to EC2 instances without requiring:
+
+* Bastion hosts
+* Open inbound ports
+* SSH keys
+
+This significantly improves security posture and operational efficiency when managing EC2 instances at scale.
+
+=== Prerequisites for Session Manager
+
+1. *SSM Agent Installation*:
+   * Most AWS-provided AMIs include the SSM Agent preinstalled
+   * Amazon Linux 2, Windows Server, Ubuntu, and RHEL AMIs are typically preconfigured
+   * For custom AMIs, ensure the SSM Agent is installed and running
+
+2. *Required IAM Permissions*:
+   * Instance profile with SSM permissions
+   * User permissions to initiate sessions
+
+3. *Network Connectivity*:
+   * Outbound internet access to SSM endpoints
+   * Or VPC endpoints for SSM, SSM Messages, and EC2 Messages services
+
+=== LZA Implementation of Session Manager
+
+The LZA Universal Config automatically:
+
+1. Deploys an EC2 instance profile with the `AmazonSSMManagedInstanceCore` managed policy to all accounts
+2. Creates necessary IAM roles for SSM operations
+3. Can optionally configure VPC endpoints for private subnets
+
+=== Configuring Session Manager in global-config.yaml
+
+Session Manager can be configured in the `global-config.yaml` file to enable advanced features:
+
+```yaml
+sessionManager:
+  sendToCloudWatchLogs: true # Enables logging of session activity to CloudWatch Logs in each account
+  sendToS3: false # Disables storing session logs in S3 bucket. Using Log Streaming, CloudWatch Logs are stored in centralized S3
+  attachPolicyToIamRoles:
+    - EC2-Default-SSM-Role
+    # You can add additional roles here that should include Session Manager permissions
+```
+
+This configuration:
+
+1. Automatically attaches Session Manager permissions to the specified IAM roles
+2. Enables logging of all session activity to CloudWatch Logs in each account
+3. Uses CloudWatch Logs streaming instead of direct S3 storage for centralized log management
+4. Can be extended to include multiple roles that should have Session Manager permissions
+
+== Managing EC2 Instance Profiles with LZA
+
+=== Default EC2 Instance Profile
+
+The LZA Universal Config deploys a standard EC2 instance profile named `EC2-Default-SSM-Role` to all accounts, which includes:
+
+* *AmazonSSMManagedInstanceCore*: Enables Systems Manager functionality
+* *CloudWatchAgentServerPolicy*: Allows sending logs and metrics to CloudWatch
+
+=== Extending the Default Instance Profile
+
+To add permissions to the default role, modify the `iam-config.yaml` file:
+
+```yaml
+roleSets:
+  - name: EC2-Default-SSM-Role
+    roles:
+      - name: EC2-Default-SSM-Role
+        assumedBy:
+          - type: service
+            principal: ec2.amazonaws.com
+        policies:
+          awsManaged:
+            - AmazonSSMManagedInstanceCore
+            - CloudWatchAgentServerPolicy
+            # Add additional AWS managed policies here
+          customerManaged:
+            - name: CustomPermissionsPolicy
+              # Reference to a custom policy defined elsewhere in the config
+```
+
+=== Creating Specialized Instance Profiles
+
+For EC2 instances with specific requirements, create additional instance profiles:
+
+```yaml
+roleSets:
+  - name: EC2-Database-Support-Role
+    roles:
+      - name: EC2-Database-Support-Role
+        assumedBy:
+          - type: service
+            principal: ec2.amazonaws.com
+        policies:
+          awsManaged:
+            - AmazonSSMManagedInstanceCore
+            - CloudWatchAgentServerPolicy
+            - AmazonRDSReadOnlyAccess
+    deploymentTargets:
+      organizationalUnits:
+        - Database
+```
+
+=== Best Practices for EC2 Instance Profiles
+
+* Follow least privilege principles when assigning permissions
+* Group common permissions into standardized roles
+* Deploy specialized roles only to accounts that require them
+* Use `excludedAccounts` to fine-tune deployment targets
+* Consider creating role hierarchies for different environments or workload types
+
+== Managing SSM Automation Runbooks
+
+=== Overview of SSM Automation in LZA
+
+SSM Automation runbooks enable you to automate common operational tasks and remediation actions across your AWS organization. LZA allows you to define and deploy standardized runbooks to all accounts and regions.
+
+=== Defining and Deploying Custom SSM Documents
+
+LZA allows you to define custom SSM documents as separate YAML files referenced in the `security-config.yaml`:
+
+```yaml
+# In security-config.yaml
+ssmAutomationDocuments:
+  - name: CustomAutomation
+    description: "Custom Automation Documents"
+    documentSets:
+      - deploymentTargets:
+          organizationalUnits:
+            - Infrastructure
+        documents:
+          - name: apply-security-patch
+            template: modules/base/default/ssm-documents/apply-security-patch.yaml
+          - name: rotate-instance-secrets
+            template: modules/base/default/ssm-documents/rotate-instance-secrets.yaml
+```
+
+Each document references a YAML file containing the SSM document definition. These custom documents will be deployed to the specified organizational units or accounts.
+
+=== Example Runbook Use Cases
+
+The LZA Universal Config includes standard runbooks for common operations:
+
+1. *attach-iam-instance-profile.yaml*:
+   * Attaches IAM instance profiles to running instances
+   * Useful for adding permissions to existing instances
+
+2. *enable-elb-logging.yaml*:
+   * Enables access logging for Elastic Load Balancers
+   * Supports compliance requirements for traffic logging
+
+=== Creating Custom Automation Runbooks
+
+To create a custom runbook:
+
+1. Create a YAML file defining the automation document:
+```yaml
+# Example: modules/base/default/ssm-documents/apply-security-patch.yaml
+description: Apply security patches to EC2 instances
+schemaVersion: '0.3'
+assumeRole: '{{AutomationAssumeRole}}'
+parameters:
+  InstanceId:
+    type: String
+    description: The ID of the instance to patch
+    default: ''
+  PatchGroup:
+    type: String
+    description: The patch group to apply patches to
+    default: 'ProductionServers'
+  RebootOption:
+    type: String
+    description: Reboot behavior after patching
+    default: 'RebootIfNeeded'
+    allowedValues:
+      - 'RebootIfNeeded'
+      - 'NoReboot'
+mainSteps:
+  - name: UpdateSSMAgent
+    action: aws:runCommand
+    inputs:
+      DocumentName: AWS-UpdateSSMAgent
+      InstanceIds:
+        - '{{InstanceId}}'
+  - name: ApplyPatches
+    action: aws:runCommand
+    inputs:
+      DocumentName: AWS-RunPatchBaseline
+      InstanceIds:
+        - '{{InstanceId}}'
+      Parameters:
+        PatchGroup: '{{PatchGroup}}'
+        RebootOption: '{{RebootOption}}'
+  - name: VerifyPatching
+    action: aws:executeAwsApi
+    inputs:
+      Service: ssm
+      Api: DescribeInstancePatchStates
+      InstanceIds:
+        - '{{InstanceId}}'
+    outputs:
+      - Name: PatchSummary
+        Selector: '$.InstancePatchStates[0].InstalledCount'
+        Type: Integer
+```
+
+2. Reference the file in your `security-config.yaml`:
+```yaml
+ssmAutomationDocuments:
+  - name: SecurityAutomation
+    description: Security Automation Documents
+    documentSets:
+      - deploymentTargets:
+          organizationalUnits:
+            - Security
+            - Infrastructure
+        documents:
+          - name: apply-security-patch
+            template: modules/base/default/ssm-documents/apply-security-patch.yaml
+```
+
+=== Integration with CloudWatch Alarms and AWS Config Rules
+
+SSM Automation runbooks can be triggered by:
+
+1. *CloudWatch Alarms*:
+```yaml
+alarms:
+  - name: HighCPUUtilization
+    # Alarm configuration...
+    alarmActions:
+      - ssm:AWS-RestartEC2Instance
+```
+
+2. *AWS Config Rules*:
+```yaml
+configRuleRemediations:
+  - name: required-tags
+    remediationAction:
+      name: AWS-TagResource
+      parameters:
+        # Parameters...
+```

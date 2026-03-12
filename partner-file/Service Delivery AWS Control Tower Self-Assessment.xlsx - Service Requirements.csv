@@ -1,0 +1,52 @@
+"AWS Control Tower Customer Reference Requirements 
+The following requirements relate to how AWS Control Tower was used in each provided customer reference.",,,,,
+ID,Requirement Description,Borinquen,,IRSI,
+,,Met?,Partner Response,Met?,Partner Response
+AWS Control Tower Expertise,,,,,
+"The following requirements relate to the AWS Partner's ability to demonstrate deep expertise with AWS Control Tower in the context of the provided
+customer references.
+",,,,,
+,,,,,
+CT-001,"Environment setup should be using AWS Control Tower
+Describe the customization use case and what challenge customization addresses.
+
+• Confirm if the  solution is deployed in an AWS Control Tower Environment.
+• Describe any challenges or customer objection to use AWS Control Tower
+
+
+Please provide the following as evidence:
+
+• Customer problem statement
+• Description of how the solution addresses the issue
+",Yes,"Yes, the solution is deployed in an AWS Control Tower environment.
+The customer’s AWS multi-account environment is governed using AWS Control Tower, which provides centralized governance, guardrails, account factory, and compliance controls across all AWS accounts.",Yes,
+CT-002,"Deployed Solution uses AWS Control Tower
+Each Case Study addresses at least one of the following eight(8) deployment patterns.Partners need to identify what deployment patterns on AWS Control Tower their solutions follow.
+
+• Migration to AWS
+• Transition from legacy landing zone to AWS Control Tower
+• Orchestrating Containerized Services - EKS, ECS, Fargate
+• Networking (VPC, Transit Gateway , DNS)
+• Management and Governance - Custom Guardrails and SCP's, Account Factory, partner tools
+• Regulatory Compliance -  HIPPA, FSI, PubSec, Enterprise Compliance, Partner tools
+• Enterprise Architecture for Horizontals - Data lakes, IOT, AI/ML and Data analytics
+• Industry Vertical Specific Solutions - Automotive, Manufacturing, Telecom, Education, Financial Services
+
+
+Please provide the following as evidence:
+
+• Description of the solution, its patterns and and how it leverages Control Tower - Use Architectural Diagrams
+• Description on why a certain deployment pattern was chosen.
+",,,,
+CT-003,"Mandatory customization patterns on top of AWS Control Tower
+Describe how the solution customizes AWS Control Tower using Customizations for AWS Control Tower (CfCTv2) (https://docs.aws.amazon.com/controltower/latest/userguide/cfct-overview.html),Account Factory for Terraform (AFT) (https://docs.aws.amazon.com/controltower/latest/userguide/taf-account-provisioning.html) or Landing Zone Accelerator (LZA)
+
+• CfCTv2 in a multi account environment: Build to the specification listed in the CfCT Github (https://github.com/aws-solutions/aws-control-tower-customizations)
+• AFT Account Factory using Terraform : Build to solution is using the AFT Github repo (https://github.com/aws-ia/terraform-aws-control_tower_account_factory)
+• Landing zone accelerator: Build to solution is using the LZA Github repo (https://github.com/awslabs/landing-zone-accelerator-on-aws)
+
+
+Please provide the following as evidence:
+
+• Configuration artifacts for the technology in use; CfCT, AFT or LZA.
+",,,,

@@ -1,0 +1,201 @@
+= Managing AWS Accounts in LZA
+
+== Introduction to Account Management with LZA
+
+AWS accounts are the fundamental security boundary in AWS. LZA provides a consistent and automated approach to provision and manage accounts across your organization with proper security controls, networking configuration, and compliance requirements.
+
+[IMPORTANT]
+====
+Always manage AWS accounts through LZA configuration rather than creating them manually in the AWS Organizations console. Accounts created outside LZA will cause pipeline failures and prevent proper bootstrapping of security controls.
+====
+
+== Prerequisites for Adding Accounts
+
+Before adding new accounts:
+
+1. Ensure the target OU already exists in your LZA configuration
+2. Plan the account's purpose, naming convention, and required configurations
+3. Determine appropriate email addresses following your organization's standards
+4. Identify which guardrails and configurations should apply to this account
+
+== Steps to Add New AWS Accounts
+
+=== 1. Plan Your Account Structure
+
+* Determine the account's purpose and workload requirements
+* Select the appropriate organizational unit (OU) for the account
+* Define key account details (name, email, etc.)
+
+=== 2. Update the accounts-config.yaml File
+
+Add the new account to your `accounts-config.yaml` file:
+
+```yaml
+mandatoryAccounts:
+  # Existing accounts...
+  
+workloadAccounts:
+  # Account definition within an existing OU
+  - name: app-production   # Required
+    email: aws+app-prod@example.com   # Required
+    organizationalUnit: Production   # Required
+    # Optional account-level configuration
+    warm: true   # Optional: initialize with temporary EC2 instance
+```
+
+For multiple accounts in the same OU:
+
+```yaml
+workloadAccounts:
+  - name: finance-prod
+    email: aws+finance-prod@example.com
+    organizationalUnit: Production
+  - name: finance-dev
+    email: aws+finance-dev@example.com
+    organizationalUnit: Development
+  - name: marketing-prod  # New account being added
+    email: aws+marketing-prod@example.com
+    organizationalUnit: Production
+```
+
+=== 3. Email Address Best Practices
+
+Utilize plus addressing for centralized management of AWS notifications:
+
+* Format: `aws+[account-name]@example.com`
+* Examples:
+  * `aws+infra-prod-01@example.com`
+  * `aws+marketing-dev-03@example.com`
+  
+All notifications will be delivered to the base address (`aws@example.com`), while maintaining unique email addresses for each account.
+
+=== 4. Deploy Changes
+
+1. Commit your changes to version control
+2. Create a pull request following your organization's change management process
+3. After approval, merge changes to trigger the LZA pipeline
+4. Monitor the pipeline execution to ensure successful deployment
+
+=== 5. Verify Account Creation and Bootstrapping
+
+1. Once the pipeline completes, verify the account appears in AWS Organizations
+2. Confirm the account has been properly bootstrapped with the expected configurations
+3. Check that the account appears in the correct OU
+
+== Updating deploymentTargets for New Accounts
+
+Many LZA features use `deploymentTargets` to determine where resources should be provisioned. After adding new accounts, you may need to update these configurations to ensure proper resource deployment.
+
+=== When to Update deploymentTargets
+
+* When you want to include/exclude specific accounts from organization-wide configurations
+* When implementing account-specific customizations
+* When deploying resources to a subset of accounts within an OU
+
+=== Additional Account Configuration Properties
+
+When adding accounts, you can use the optional `warm` property for new account initialization:
+
+```yaml
+workloadAccounts:
+  - name: specialized-account
+    email: aws+specialized@example.com
+    organizationalUnit: Infrastructure
+    warm: true  # Initialize account with a temporary EC2 instance
+```
+
+* `warm`: When `true`, LZA will "warm" the new account by creating a temporary EC2 instance that runs for about 15 minutes. This helps initialize certain AWS service dependencies for new accounts. This property can be removed after the account has been successfully provisioned.
+
+=== Example deploymentTargets Configurations
+
+Target specific accounts:
+```yaml
+deploymentTargets:
+  accounts:
+    - SharedServices
+    - NetworkHub
+    - NewAccountName  # Newly added account
+```
+
+Target accounts with exclusions:
+```yaml
+deploymentTargets:
+  organizationalUnits:
+    - Production
+  excludedAccounts:
+    - LegacyProduction  # Exclude specific accounts
+```
+
+=== Common Configuration Files to Update
+
+After adding a new account, review these configuration files for deploymentTarget updates:
+
+* *security-config.yaml*: Security controls, AWS Config rules, Security Hub configurations
+* *network-config.yaml*: VPCs, subnets, Transit Gateway configurations
+* *iam-config.yaml*: IAM roles, policies, and permission sets
+* *customizations-config.yaml*: Custom resources and CloudFormation templates
+
+[IMPORTANT]
+====
+Review all configuration files systematically to ensure your new account receives the appropriate configurations. Missing a deploymentTarget could result in security or operational gaps.
+====
+
+== Best Practices for Account Management
+
+* *Security First*: Configure preventative and detective controls before allowing usage of new accounts
+* *Consistent Naming*: Use consistent naming conventions for accounts across your organization
+* *Centralized Email Management*: Use plus addressing for centralized notification management
+* *Documentation*: Maintain documentation of account purpose and ownership
+* *Access Control*: Configure appropriate IAM permissions and guardrails before granting user access
+* *Regular Reviews*: Periodically review account usage and configurations
+
+== Account Lifecycle Management
+
+=== Moving Accounts Between OUs
+
+When you need to move an account to a different OU:
+
+1. Update the `organizationalUnit` property in the `accounts-config.yaml` file
+2. Ensure account-specific configurations are updated as needed
+3. Deploy through the LZA pipeline rather than moving accounts manually
+
+=== Managing Account Lifecycle
+
+To handle accounts that should no longer be actively managed through LZA, you have several options:
+
+1. *Remove from Configuration*:
+   * Remove the account entry from the `accounts-config.yaml` file entirely
+   * Note that this doesn't delete the account but removes it from LZA management
+
+2. *Move to a Suspended OU*:
+```yaml
+workloadAccounts:
+  - name: deprecated-account
+    email: aws+deprecated@example.com
+    organizationalUnit: Suspended  # Move to a dedicated OU for suspended accounts
+```
+
+3. *Use Account Quarantine Process*:
+   * Follow your organization's account suspension procedures
+   * Consider using AWS Organizations to suspend account access
+   * Update documentation to reflect the account's suspended status
+
+[NOTE]
+====
+LZA doesn't have a built-in "ignore" or "decommission" flag. To effectively decommission an account, move it to a dedicated Suspended OU that has minimal configurations applied to it, or remove it from the LZA configuration entirely.
+====
+
+== Troubleshooting Account Management
+
+=== Common Issues
+
+* *Email Already In Use*: Ensure the email address is not already associated with another AWS account
+* *Pipeline Failures*: Check if accounts were created outside of LZA
+* *Missing Configurations*: Verify deploymentTargets include the new account where needed
+* *Bootstrapping Failures*: Check pipeline logs for specific error messages
+
+=== Resolution Steps
+
+1. Review pipeline logs to identify specific errors
+2. Make necessary corrections to your configuration files
+3. Re-run the LZA pipeline

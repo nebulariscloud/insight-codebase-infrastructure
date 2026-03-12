@@ -1,0 +1,169 @@
+= Managing AWS Organizational Units (OUs) in LZA
+
+== Introduction to OUs in LZA
+
+AWS Organizational Units (OUs) are the primary organizational structure in AWS Organizations that help you hierarchically group accounts. LZA uses this structure to apply configurations, guardrails, and policies across your AWS environment in a consistent manner.
+
+[IMPORTANT]
+====
+Always manage your OU structure through LZA configuration rather than making changes directly in the AWS Organizations console. This ensures that LZA maintains an accurate representation of your environment and can properly apply configurations.
+====
+
+== Steps to Add New Organizational Units
+
+=== 1. Plan Your OU Structure
+
+Before adding new OUs:
+
+* Determine the purpose and scope of the new OU
+* Decide on the parent OU (where in the hierarchy it should be placed)
+* Identify which accounts will be placed in this OU initially
+* Consider what security controls, policies, and configurations should apply to this OU
+
+=== 2. Update the organization-config.yaml File
+
+Add the new OU to the `organizationalUnits` section of your `organization-config.yaml`:
+
+```yaml
+organizationalUnits:
+  - name: Security
+    # Existing OUs...
+  - name: NewOUName       # Add your new top-level OU here
+```
+
+For a nested OU structure, use path notation with "/" to define the hierarchy:
+
+```yaml
+organizationalUnits:
+  - name: Workloads
+  - name: Workloads/Development
+  - name: Workloads/Production
+  - name: Workloads/NewEnvironment  # New nested OU
+```
+
+[NOTE]
+====
+LZA uses path notation with "/" to define OU hierarchies, not nested objects. Always make sure the parent OU is defined before defining any children.
+====
+
+For deeper hierarchies, continue using the path notation:
+
+```yaml
+organizationalUnits:
+  - name: Workloads
+  - name: Workloads/Development
+  - name: Workloads/Development/Frontend
+  - name: Workloads/Development/Backend
+  - name: Workloads/Production
+  - name: Workloads/Production/Frontend
+  - name: Workloads/Production/Backend
+```
+
+Each entry represents a complete path from the root of the organization to the specific OU. The parent OUs must be defined before their child OUs.
+
+=== 3. Deploy Changes
+
+1. Commit your changes to version control
+2. Create a pull request following your organization's change management process
+3. After approval, merge changes to trigger the LZA pipeline
+4. Monitor the pipeline execution to ensure successful deployment
+
+=== 4. Verify OU Creation
+
+Once the pipeline completes:
+
+1. Sign in to the AWS Organizations console
+2. Verify that the new OU structure appears correctly
+3. Confirm that any accounts moved to the new OU appear in the expected location
+
+== Updating deploymentTargets for Existing Resources
+
+After adding new OUs, you need to update `deploymentTargets` across various LZA configuration files to ensure resources are properly deployed to your new organizational structure.
+
+=== Common Configuration Files to Update
+
+* *security-config.yaml*: Security controls, AWS Config rules, Security Hub configurations
+* *iam-config.yaml*: IAM roles, policies, and permission sets
+* *organization-config.yaml*: Service Control Policies (SCPs)
+* *network-config.yaml*: VPCs, subnets, Transit Gateway configurations
+* *customizations-config.yaml*: Custom resources and CloudFormation templates
+
+=== Example deploymentTargets Update
+
+Before:
+```yaml
+deploymentTargets:
+  organizationalUnits:
+    - Workloads/Production
+    - Workloads/Development
+```
+
+After (adding a new OU):
+```yaml
+deploymentTargets:
+  organizationalUnits:
+    - Workloads/Production
+    - Workloads/Development
+    - Workloads/NewEnvironment  # Added new OU to deployment targets
+```
+
+To target an entire hierarchy:
+```yaml
+deploymentTargets:
+  organizationalUnits:
+    - Workloads  # This targets Workloads and all its child OUs
+```
+
+To target specific subsets:
+```yaml
+deploymentTargets:
+  organizationalUnits:
+    - Workloads/Development/Frontend
+    - Workloads/Production
+```
+
+[IMPORTANT]
+====
+Review all configuration files systematically to ensure your new OU receives the appropriate configurations. Missing a deploymentTarget could result in security or operational gaps.
+====
+
+== Best Practices for Managing OUs
+
+* *Incremental Changes*: Make small, focused changes to your OU structure and test thoroughly
+* *Isolation*: Avoid changing OU structure and other configurations simultaneously
+* *Documentation*: Maintain documentation of your OU structure and purpose of each OU
+* *Regular Review*: Periodically review your OU structure to ensure it still meets organizational needs
+
+=== Managing Existing OUs
+
+* You must define all existing OUs in your `organization-config.yaml` file
+* For OUs you don't want to manage through LZA, set `ignore: true`:
+
+```yaml
+organizationalUnits:
+  - name: Sandbox
+    ignore: true  # LZA will not manage this OU
+```
+
+=== Moving Accounts Between OUs
+
+When you need to reorganize accounts:
+
+1. First update the `organization-config.yaml` file
+2. Ensure any OU-specific configurations in other configuration files are updated
+3. Deploy through the LZA pipeline rather than moving accounts manually
+
+== Troubleshooting OU Management
+
+=== Common Issues
+
+* *Pipeline Failure*: Ensure all existing OUs are properly defined in your configuration
+* *Configuration Not Applied*: Check that `deploymentTargets` includes the new OU
+* *Drift Detection*: If OUs were changed outside of LZA, the pipeline may fail; realign your configuration with the actual state
+
+=== Resolution Steps
+
+1. Run `yarn validate-config` to identify configuration errors
+2. Compare your configuration with the AWS Organizations console to detect misalignment
+3. Make necessary corrections to your configuration files
+4. Re-run the LZA pipeline
