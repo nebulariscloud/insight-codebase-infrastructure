@@ -1,7 +1,7 @@
 #######################################################################################################################
-# Shared VPC model WITHOUT Inspection VPC and Network Firewall                                                      #
-# Cost-optimized: removes ~$570/month in Network Firewall costs                                                     #
-# TGW spoke route goes directly to egress VPC instead of through inspection                                         #
+# For additional configurable services, features, and property descriptions,                                          #
+# please review the NetworkConfig class reference in our TypeDoc:                                                     #
+# https://awslabs.github.io/landing-zone-accelerator-on-aws/latest/user-guide/config/#network-configuration           #
 #######################################################################################################################
 
 defaultVpc:
@@ -31,11 +31,10 @@ transitGateways:
               account: Perimeter
       - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-tgw-rt-spoke"
         routes:
-          # Routes directly to egress VPC instead of inspection
           - destinationCidrBlock: 0.0.0.0/0
             attachment:
-              vpcName: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-egress"
-              account: Perimeter
+              vpcName: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-inspection"
+              account: Network
 
 centralNetworkServices:
   delegatedAdminAccount: Network
@@ -43,13 +42,13 @@ centralNetworkServices:
   ipams:
     - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-ipam"
       region: "{{ HomeRegion }}"
-      description: IP regional allocation for LZA
+      description: IP regional allocation for LZA.
       operatingRegions:
         - "{{ HomeRegion }}"
       scopes: []
       pools:
         - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-ipam-global-pool"
-          description: IP global pool allocation for LZA
+          description: IP global pool allocation for LZA.
           provisionedCidrs:
             - "{{ GlobalCidr}}"
           tags:
@@ -87,6 +86,18 @@ centralNetworkServices:
           shareTargets:
             accounts:
               - Perimeter
+        - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-ipam-inspection-pool"
+          description: IP regional pool allocation for the Network LZA account
+          locale: "{{ HomeRegion }}"
+          provisionedCidrs:
+            - "{{ HomeRegionInspectionCidr }}"
+          sourceIpamPool: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-ipam-regional-pool"
+          tags:
+            - key: Accelerator
+              value: "{{ AcceleratorPrefix }}"
+          shareTargets:
+            accounts:
+              - Network
         - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-ipam-endpoints-pool"
           description: IP regional pool allocation for the Network LZA account
           locale: "{{ HomeRegion }}"
@@ -148,14 +159,86 @@ centralNetworkServices:
             accounts:
               - Network
 
-  # NO Network Firewall - removed to save ~$570/month
+  networkFirewall:
+    firewalls:
+      - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-nfw"
+        firewallPolicy: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-nfw-policy"
+        subnets:
+          - "{{ AcceleratorPrefix }}-{{ HomeRegion }}-inspection-fw-a"
+          - "{{ AcceleratorPrefix }}-{{ HomeRegion }}-inspection-fw-b"
+        vpc: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-inspection"
+        loggingConfiguration:
+          - destination: cloud-watch-logs # Logs will automatically be forwarded to S3
+            type: ALERT
+          - destination: cloud-watch-logs # Logs will automatically be forwarded to S3
+            type: FLOW
+        tags:
+          - key: Accelerator
+            value: "{{ AcceleratorPrefix }}"
+    policies:
+      - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-nfw-policy"
+        regions:
+          - "{{ HomeRegion }}"
+        firewallPolicy:
+          statelessDefaultActions: ["aws:forward_to_sfe"]
+          statelessFragmentDefaultActions: ["aws:forward_to_sfe"]
+          statefulRuleGroups:
+            - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-nfw-stateful-rule-group"
+        shareTargets:
+          # Firewall rules are shared automatically with Network account (owner)
+          # Add additional accounts/Organizational units (OUs) only if broader sharing is required
+          accounts: []
+    rules:
+      - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-nfw-stateful-rule-group"
+        regions:
+          - "{{ HomeRegion }}"
+        capacity: 1000
+        type: STATEFUL
+        ruleGroup:
+          rulesSource:
+            rulesFile: firewall-rules/rules.txt
+          ruleVariables:
+            ipSets:
+              - name: HOME_NET
+                definition:
+                  - "{{ HomeRegionRegionalCidr }}"
+              - name: HOME_REGION_ENDPOINTS
+                definition:
+                  - "{{ HomeRegionEndpointsCidr }}"
+              - name: HOME_REGION_DEV_POOL
+                definition:
+                  - "{{ HomeRegionDevWorkloadsCidr }}"
+              - name: HOME_REGION_TEST_POOL
+                definition:
+                  - "{{ HomeRegionTestWorkloadsCidr }}"
+              - name: HOME_REGION_PROD_POOL
+                definition:
+                  - "{{ HomeRegionProdWorkloadsCidr }}"
+              - name: HOME_REGION_SHARED_SERVICES_POOL
+                definition:
+                  - "{{ HomeRegionSharedServicesCidr }}"
+            portSets:
+              - name: HOME_REGION_SS_PORTS
+                definition: ["443"]
+        shareTargets:
+          # Firewall rules are shared automatically with Network account (owner)
+          # Add additional accounts/Organizational units (OUs) only if broader sharing is required
+          accounts: []
 
 endpointPolicies:
+  # Endpoint policies
+  #   - Use these policies to define standard policies for VPC endpoints
   - name: Endpoint-Default
     document: vpc-endpoint-policies/default.json
 
 vpcs:
   # VPC Endpoints
+  #  - Deploys to network account
+  #  - Utilizes two AZs for deployments of subnets,leaving space for 3rd AZ
+  #    - Endpoints Subnet
+  #    - Transit Gateway attachment subnet
+  #  - This VPC is intended to host AWS service endpoints
+  #    - Enable API access to services without traversing the Egress VPC (Internet Access)
   - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-endpoints"
     account: Network
     region: "{{ HomeRegion }}"
@@ -250,6 +333,9 @@ vpcs:
       subnets:
         - "{{ AcceleratorPrefix }}-{{ HomeRegion }}-endpoints-a"
         - "{{ AcceleratorPrefix }}-{{ HomeRegion }}-endpoints-b"
+      # Note: VPC endpoint availability varies by AWS Region and Availability Zone.
+      # Review and adjust the endpoint list based on your specific region's service availability.
+      # Some endpoints may need to be commented out if not supported in your environment.
       endpoints:
         - service: ec2
         - service: ec2messages
@@ -265,11 +351,11 @@ vpcs:
 
   # VPC Ingress
   #  - Deploys to perimeter account
-  #  - Utilizes two AZs for deployment of subnets, leaving space for 3rd AZ
-  #     - Firewall Subnet - provisioned if you require a firewall
+  #  - Utilizes two AZs for deployments of subnets, leaving space for 3rd AZ
+  #     - Firewall Subnet - currently not used but provisioned if you require a firewall
   #     - Public Subnet
   #     - Transit Gateway attachment subnet
-  #  - This VPC is intended for load balancers or similar services
+  #  - This VPC is intended to load balancers or similar services
   - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-ingress"
     account: Perimeter
     region: "{{ HomeRegion }}"
@@ -379,12 +465,12 @@ vpcs:
     useCentralEndpoints: true
 
   # VPC Egress
-  #  - Deploys to perimeter account
-  #  - Utilizes two AZs for deployment of subnets, leaving space for 3rd AZ
-  #     - Firewall Subnet - provisioned if you require a firewall
+  #  - Deploys to network account
+  #  - Utilizes two AZs for deployments of subnets, leaving space for 3rd AZ
+  #     - Firewall Subnet - currently not used but provisioned if you require a firewall
   #     - Public Subnet
   #     - Transit Gateway attachment subnet
-  #  - This VPC hosts NAT Gateway devices providing internet access for your VPCs
+  #  - This VPC is intended to host NAT Gateway devices providing internet access for your VPCs
   - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-egress"
     account: Perimeter
     region: "{{ HomeRegion }}"
@@ -505,9 +591,93 @@ vpcs:
         - service: dynamodb
     useCentralEndpoints: true
 
+  # VPC Inspection
+  #  - Utilizes AWS Network Firewall for inspection of all traffic North-South & East-West
+  #  - Utilizes two AZs for deployment of subnets, leaving space for 3rd AZ
+  - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-inspection"
+    account: Network
+    region: "{{ HomeRegion }}"
+    ipamAllocations:
+      - ipamPoolName: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-ipam-inspection-pool"
+        netmaskLength: {{ HomeRegionInspectionVpcMaskLength }}
+    defaultSecurityGroupRulesDeletion: true
+    internetGateway: false
+    enableDnsHostnames: true
+    enableDnsSupport: true
+    instanceTenancy: default
+    routeTables:
+      - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-inspection-rt-tgw-a"
+        routes:
+          - name: TgwRoute
+            destination: 0.0.0.0/0
+            type: networkFirewall
+            target: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-nfw"
+            targetAvailabilityZone: a
+      - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-inspection-rt-tgw-b"
+        routes:
+          - name: TgwRoute
+            destination: 0.0.0.0/0
+            type: networkFirewall
+            target: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-nfw"
+            targetAvailabilityZone: b
+      - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-inspection-rt-fw-a"
+        routes:
+          - name: TgwRoute
+            destination: 0.0.0.0/0
+            type: transitGateway
+            target: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-tgw"
+      - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-inspection-rt-fw-b"
+        routes:
+          - name: TgwRoute
+            destination: 0.0.0.0/0
+            type: transitGateway
+            target: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-tgw"
+    subnets:
+      - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-inspection-fw-a"
+        availabilityZone: a
+        routeTable: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-inspection-rt-fw-a"
+        ipamAllocation:
+          ipamPoolName: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-ipam-inspection-pool"
+          netmaskLength: {{ HomeRegionInspectionFwSubnetMaskLength }}
+      - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-inspection-fw-b"
+        availabilityZone: b
+        routeTable: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-inspection-rt-fw-b"
+        ipamAllocation:
+          ipamPoolName: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-ipam-inspection-pool"
+          netmaskLength: {{ HomeRegionInspectionFwSubnetMaskLength }}
+      - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-inspection-tgw-a"
+        availabilityZone: a
+        routeTable: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-inspection-rt-tgw-a"
+        ipamAllocation:
+          ipamPoolName: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-ipam-inspection-pool"
+          netmaskLength: 28
+      - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-inspection-tgw-b"
+        availabilityZone: b
+        routeTable: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-inspection-rt-tgw-b"
+        ipamAllocation:
+          ipamPoolName: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-ipam-inspection-pool"
+          netmaskLength: 28
+        tags:
+          - key: SubnetType
+            value: "{{ AcceleratorPrefix }}-Tgw"
+    transitGatewayAttachments:
+      - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-inspection"
+        transitGateway:
+          name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-tgw"
+          account: Network
+        options:
+          applianceModeSupport: enable # This is required to ensure symmetric routing and maintain stateful inspection capabilities
+        routeTableAssociations:
+          - "{{ AcceleratorPrefix }}-{{ HomeRegion }}-tgw-rt-firewall"
+        routeTablePropagations: []
+        subnets:
+          - "{{ AcceleratorPrefix }}-{{ HomeRegion }}-inspection-tgw-a"
+          - "{{ AcceleratorPrefix }}-{{ HomeRegion }}-inspection-tgw-b"
+    useCentralEndpoints: true
+
   # VPC SharedServices
   #  - Deploys to SharedServices account
-  #  - Utilizes two AZs for deployment of subnets, leaving space for 3rd AZ
+  #  - Utilizes two AZs for deployments of subnets, leaving space for 3rd AZ
   #    - Web / App / Db Subnet
   #    - Transit Gateway attachment subnet
   #  - This VPC is intended to host services which your entire organization might rely on
@@ -563,6 +733,7 @@ vpcs:
         routes: []
       - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-sharedservices-rt-data-b"
         routes: []
+
       - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-sharedservices-rt-tgw-a"
         routes: []
       - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-sharedservices-rt-tgw-b"
@@ -642,8 +813,6 @@ vpcs:
     useCentralEndpoints: true
 
   # Shared Dev VPC
-  #  - Deploys to Network account with subnet sharing to Dev accounts
-  #  - Add subnets and route tables as needed, then share with specific accounts
   - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-shared-dev"
     account: Network
     region: "{{ HomeRegion }}"
@@ -728,7 +897,6 @@ vpcs:
     useCentralEndpoints: true
 
   # Shared Test VPC
-  #  - Deploys to Network account with subnet sharing to Test accounts
   - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-shared-test"
     account: Network
     region: "{{ HomeRegion }}"
@@ -813,7 +981,6 @@ vpcs:
     useCentralEndpoints: true
 
   # Shared Prod VPC
-  #  - Deploys to Network account with subnet sharing to Prod accounts
   - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-shared-prod"
     account: Network
     region: "{{ HomeRegion }}"

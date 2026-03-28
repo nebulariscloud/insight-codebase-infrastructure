@@ -45,27 +45,3 @@ workloadAccounts:
     description: The Perimeter account
     email: insightgroup-perimeter@nebulariscloud.com
     organizationalUnit: Infrastructure
-  - name: Production
-    description: Production workloads
-    email: insightgroup-production@nebulariscloud.com
-    organizationalUnit: Workloads/Prod
-  - name: Staging
-    description: Staging and pre-production workloads
-    email: insightgroup-staging@nebulariscloud.com
-    organizationalUnit: Workloads/Test
-  - name: Development
-    description: Code and feature development
-    email: insightgroup-development@nebulariscloud.com
-    organizationalUnit: Workloads/Dev
-  - name: QA
-    description: Quality assurance and integration testing
-    email: insightgroup-qa@nebulariscloud.com
-    organizationalUnit: Workloads/Test
-  - name: UAT
-    description: User acceptance testing
-    email: insightgroup-uat@nebulariscloud.com
-    organizationalUnit: Workloads/Test
-  - name: Sandbox
-    description: Experimentation, PoC work, and learning
-    email: insightgroup-sandbox@nebulariscloud.com
-    organizationalUnit: Workloads/Sandbox
