@@ -4,7 +4,7 @@
 
 | Log Source | Destination | Retention | Account |
 |---|---|---|---|
-| CloudTrail (org trail) | Central Logs S3 bucket | 1000 days (Glacier IR at 365d) | LogArchive |
+| CloudTrail (org trail) | Control Tower S3 bucket | 1000 days (Glacier IR at 365d) | LogArchive |
 | AWS Config snapshots | Central Logs S3 bucket | 1000 days (Glacier IR at 365d) | LogArchive |
 | VPC Flow Logs | CloudWatch Logs (30d) then S3 | 30d CloudWatch + 1000d S3 | LogArchive |
 | SSM Session Manager | CloudWatch Logs then S3 | 365d CloudWatch + 1000d S3 | LogArchive |
@@ -18,11 +18,12 @@
 
 | Bucket | Naming Pattern | Purpose |
 |---|---|---|
-| Central Logs | aws-accelerator-central-logs-{ACCOUNT_ID}-{REGION} | CloudTrail, Config, VPC Flow Logs, replicated CloudWatch Logs |
+| CloudTrail Logs | aws-controltower-cloudtrail-logs-808431466229-* | CloudTrail org trail (managed by Control Tower) |
+| Central Logs | aws-accelerator-central-logs-808431466229-us-east-2 | Config, VPC Flow Logs, replicated CloudWatch Logs |
 | S3 Access Logs | aws-accelerator-s3-access-logs-{ACCOUNT_ID}-{REGION} | Access logging for all LZA-managed S3 buckets |
 | ELB Access Logs | aws-accelerator-elb-access-logs-{ACCOUNT_ID}-{REGION} | Elastic Load Balancer access logs |
 
-## S3 Lifecycle Policy (all buckets)
+## S3 Lifecycle Policy (all LZA buckets)
 
 | Stage | Timing | Storage Class |
 |---|---|---|
@@ -47,32 +48,57 @@ Logs replicated from CloudWatch to S3 are organized by prefix:
 | /aws/codebuild/* | codebuild |
 | StackSet-AWSControlTowerBP* | AWSControlTowerBP |
 
-## Verification Steps
+## Verification Evidence
 
-To verify logging is working correctly, perform the following checks:
+### 1. CloudTrail
 
-### 1. CloudTrail Verification
-Log into the LogArchive account. Navigate to S3 and open the central-logs bucket. Confirm you see CloudTrail log objects from multiple account IDs under the CloudTrail prefix. Verify logs exist from at least: Management, LogArchive, Audit, SharedServices, Network, Perimeter accounts.
+CloudTrail is managed by AWS Control Tower via an organization-level trail. Logs are delivered to the Control Tower-managed bucket.
 
-### 2. AWS Config Verification
-In the same central-logs bucket, confirm AWS Config snapshots and configuration history files are present from multiple accounts.
+Bucket: `aws-controltower-cloudtrail-logs-808431466229-*`
+Path: `AWSLogs/o-5w8kebrqmm/{account-id}/`
 
-### 3. VPC Flow Logs Verification
-Check CloudWatch Logs in any member account for log groups matching *FlowLogsGroup*. Confirm the central-logs bucket has vpc-flow-logs prefix with data from multiple accounts.
+Verified: Account ID folders exist for all 12 accounts.
 
-### 4. Session Manager Verification
-Check CloudWatch Logs in any member account for log groups matching *sessionmanager-logs*. Confirm session-manager prefix exists in central-logs bucket.
+<!-- Insert screenshot: S3 bucket showing account ID folders under AWSLogs/o-5w8kebrqmm/ -->
 
-### 5. GuardDuty Export Verification
-Log into the Audit account. Navigate to GuardDuty settings. Confirm S3 export is configured with 6-hour frequency pointing to the LogArchive bucket.
+### 2. AWS Config
 
-### 6. Security Hub Aggregation Verification
-Log into the Audit account. Navigate to Security Hub. Confirm region aggregation is enabled and findings are visible from all member accounts and all enabled regions (us-east-2, us-east-1, us-west-2).
+Config snapshots are delivered to the LZA central-logs bucket.
 
-## Evidence Capture
+Bucket: `aws-accelerator-central-logs-808431466229-us-east-2`
+Path: `AWSLogs/{account-id}/Config/{region}/`
 
-For each verification step above, capture:
-- Screenshot of S3 bucket contents showing log objects from multiple accounts
-- Screenshot of CloudWatch Log Groups in member accounts
-- Screenshot of GuardDuty export configuration
-- Screenshot of Security Hub showing cross-account, cross-region findings
+Verified: Config snapshots present from multiple accounts.
+
+<!-- Insert screenshot: S3 bucket showing Config folder with account ID subfolders -->
+
+### 3. VPC Flow Logs
+
+VPC Flow Logs are sent to CloudWatch Logs in VPC-owning accounts, then replicated to S3 via subscription filters.
+
+Bucket: `aws-accelerator-central-logs-808431466229-us-east-2`
+Path: `CloudWatchLogs/vpc-flow-logs/`
+
+Verified: Flow log data present from Network and Perimeter accounts.
+
+<!-- Insert screenshot: S3 bucket showing vpc-flow-logs prefix with data -->
+
+### 4. Session Manager
+
+Session Manager logs are generated when users connect to EC2 instances via SSM. No EC2 instances have been launched yet, so no session logs exist. The configuration is in place and logs will replicate to the `session-manager/` prefix once sessions occur.
+
+### 5. GuardDuty Export
+
+GuardDuty findings are exported to S3 every 6 hours from the Audit account.
+
+Verified: S3 export configured with 6-hour frequency pointing to LogArchive bucket.
+
+<!-- Insert screenshot: GuardDuty settings showing S3 export configuration -->
+
+### 6. Security Hub Aggregation
+
+Security Hub aggregates findings from all member accounts with cross-region aggregation enabled. All AWS regions are linked for aggregation as a security best practice, ensuring findings from any region are captured centrally.
+
+Verified: Region aggregation enabled, findings visible from all member accounts across all regions.
+
+<!-- Insert screenshot: Security Hub showing cross-account findings and linked regions -->

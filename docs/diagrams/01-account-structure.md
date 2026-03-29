@@ -17,26 +17,28 @@ graph TD
     OU_WORK["Workloads OU"]:::ou
     OU_SUSP["Suspended OU<br/><i>ignored</i>"]:::ou
 
-    ROOT --> MGMT["Management<br/><code>066971257969</code><br/><i>insightgroup-management@</i>"]:::root
+    ROOT --> MGMT["Management<br/><code>066971257969</code>"]:::root
     ROOT --> OU_SEC
     ROOT --> OU_INFRA
     ROOT --> OU_WORK
     ROOT --> OU_SUSP
 
-    OU_SEC --> LOG["LogArchive<br/><code>808431466229</code><br/><i>insightgroup-log-archive@</i>"]:::security
-    OU_SEC --> AUDIT["Audit<br/><code>713939170920</code><br/><i>insightgroup-audit@</i>"]:::security
+    OU_SEC --> LOG["LogArchive<br/><code>808431466229</code>"]:::security
+    OU_SEC --> AUDIT["Audit<br/><code>021655151355</code>"]:::security
 
-    OU_INFRA --> SHARED["SharedServices<br/><code>021655151355</code><br/><i>insightgroup-shared@</i>"]:::infra
-    OU_INFRA --> NET["Network<br/><i>insightgroup-network@</i>"]:::infra
-    OU_INFRA --> PERIM["Perimeter<br/><code>857876979853</code><br/><i>insightgroup-perimeter@</i>"]:::infra
+    OU_INFRA --> SHARED["SharedServices<br/><code>547368325532</code>"]:::infra
+    OU_INFRA --> NET["Network<br/><code>857876979853</code>"]:::infra
+    OU_INFRA --> PERIM["Perimeter<br/><code>713939170920</code>"]:::infra
 
     OU_WORK --> OU_SANDBOX["Sandbox"]:::ou
     OU_WORK --> OU_DEV["Dev"]:::ou
     OU_WORK --> OU_TEST["Test"]:::ou
     OU_WORK --> OU_PROD["Prod"]:::ou
 
-    OU_SANDBOX -.->|"future accounts"| SANDBOX_ACCT["..."]:::workload
-    OU_DEV -.->|"future accounts"| DEV_ACCT["..."]:::workload
-    OU_TEST -.->|"future accounts"| TEST_ACCT["..."]:::workload
-    OU_PROD -.->|"future accounts"| PROD_ACCT["..."]:::workload
+    OU_SANDBOX --> SANDBOX["Sandbox<br/><code>470337543799</code>"]:::workload
+    OU_DEV --> DEV["Development<br/><code>070502825675</code>"]:::workload
+    OU_TEST --> STAGING["Staging<br/><code>870150364800</code>"]:::workload
+    OU_TEST --> QA["QA<br/><code>806997205179</code>"]:::workload
+    OU_TEST --> UAT["UAT<br/><code>832511099188</code>"]:::workload
+    OU_PROD --> PROD["Production<br/><code>395516496764</code>"]:::workload
 ```

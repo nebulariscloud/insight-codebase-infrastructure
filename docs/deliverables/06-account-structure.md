@@ -7,22 +7,22 @@ Root
 ├── Management Account (066971257969)
 ├── Security OU
 │   ├── LogArchive (808431466229)
-│   └── Audit (713939170920)
+│   └── Audit (021655151355)
 ├── Infrastructure OU
-│   ├── SharedServices (021655151355)
-│   ├── Network
-│   └── Perimeter (857876979853)
+│   ├── SharedServices (547368325532)
+│   ├── Network (857876979853)
+│   └── Perimeter (713939170920)
 ├── Workloads OU
 │   ├── Sandbox
-│   │   └── Sandbox Account
+│   │   └── Sandbox (470337543799)
 │   ├── Dev
-│   │   └── Development Account
+│   │   └── Development (070502825675)
 │   ├── Test
-│   │   ├── Staging Account
-│   │   ├── QA Account
-│   │   └── UAT Account
+│   │   ├── Staging (870150364800)
+│   │   ├── QA (806997205179)
+│   │   └── UAT (832511099188)
 │   └── Prod
-│       └── Production Account
+│       └── Production (395516496764)
 └── Suspended OU (ignored)
 ```
 
@@ -57,26 +57,26 @@ This is the AWS-recommended pattern per the AWS Security Reference Architecture.
 |---|---|---|---|---|
 | Management | 066971257969 | insightgroup-management@nebulariscloud.com | Root | AWS Organizations, Control Tower, LZA pipeline |
 | LogArchive | 808431466229 | insightgroup-log-archive@nebulariscloud.com | Security | Centralized log storage (CloudTrail, Config, VPC Flow Logs) |
-| Audit | 713939170920 | insightgroup-audit@nebulariscloud.com | Security | Delegated admin for security services |
+| Audit | 021655151355 | insightgroup-audit@nebulariscloud.com | Security | Delegated admin for security services |
 
 ### Infrastructure Accounts
 
 | Account | ID | Email | OU | Purpose |
 |---|---|---|---|---|
-| SharedServices | 021655151355 | insightgroup-shared@nebulariscloud.com | Infrastructure | Identity Center delegation, shared org services |
-| Network | — | insightgroup-network@nebulariscloud.com | Infrastructure | Transit Gateway, IPAM, Shared VPCs, DNS |
-| Perimeter | 857876979853 | insightgroup-perimeter@nebulariscloud.com | Infrastructure | Ingress/Egress VPCs, NAT Gateways, internet boundary |
+| SharedServices | 547368325532 | insightgroup-shared@nebulariscloud.com | Infrastructure | Identity Center delegation, shared org services |
+| Network | 857876979853 | insightgroup-network@nebulariscloud.com | Infrastructure | Transit Gateway, IPAM, Shared VPCs, DNS |
+| Perimeter | 713939170920 | insightgroup-perimeter@nebulariscloud.com | Infrastructure | Ingress/Egress VPCs, NAT Gateways, internet boundary |
 
 ### Workload Accounts
 
-| Account | Email | OU | Purpose |
-|---|---|---|---|
-| Production | insightgroup-production@nebulariscloud.com | Workloads/Prod | Production workloads |
-| Staging | insightgroup-staging@nebulariscloud.com | Workloads/Test | Pre-production / staging |
-| Development | insightgroup-development@nebulariscloud.com | Workloads/Dev | Feature development |
-| QA | insightgroup-qa@nebulariscloud.com | Workloads/Test | Quality assurance and integration testing |
-| UAT | insightgroup-uat@nebulariscloud.com | Workloads/Test | User acceptance testing |
-| Sandbox | insightgroup-sandbox@nebulariscloud.com | Workloads/Sandbox | Experimentation and PoC |
+| Account | ID | Email | OU | Purpose |
+|---|---|---|---|---|
+| Production | 395516496764 | insightgroup-production@nebulariscloud.com | Workloads/Prod | Production workloads |
+| Staging | 870150364800 | insightgroup-staging@nebulariscloud.com | Workloads/Test | Pre-production / staging |
+| Development | 070502825675 | insightgroup-development@nebulariscloud.com | Workloads/Dev | Feature development |
+| QA | 806997205179 | insightgroup-qa@nebulariscloud.com | Workloads/Test | Quality assurance and integration testing |
+| UAT | 832511099188 | insightgroup-uat@nebulariscloud.com | Workloads/Test | User acceptance testing |
+| Sandbox | 470337543799 | insightgroup-sandbox@nebulariscloud.com | Workloads/Sandbox | Experimentation and PoC |
 
 ## Roles in Every Account
 

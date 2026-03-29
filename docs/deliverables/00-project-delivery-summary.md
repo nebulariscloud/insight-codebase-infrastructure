@@ -18,8 +18,7 @@ Deployment of AWS Landing Zone Accelerator (LZA) v1.14.1 on AWS Control Tower v4
 ## What Was Deployed
 
 - AWS Control Tower with 11 proactive controls
-- 12 AWS accounts across 4 organizational units (Security, Infrastructure, Workloads, Suspended)
-- 8 Service Control Policies, 1 Resource Control Policy, 1 Declarative Policy
+- 12 AWS accounts across 4 organizational units (Security, Infrastructure, Workloads, Suspended)- 8 Service Control Policies, 1 Resource Control Policy, 1 Declarative Policy
 - AWS Security Hub with 3 standards (FSBP, NIST 800-53 Rev 5, CIS v3.0)
 - Amazon GuardDuty with S3 and EKS protection
 - Amazon Macie for sensitive data discovery
@@ -42,7 +41,10 @@ Deployment of AWS Landing Zone Accelerator (LZA) v1.14.1 on AWS Control Tower v4
 | 4 | SCP validation report (with verification steps) | `docs/deliverables/04-scp-validation-report.md` |
 | 5 | AWS Config and CloudTrail centralized logging config | `docs/deliverables/05-config-cloudtrail-logging.md` |
 | 6 | Account structure (OUs, accounts, roles) | `docs/deliverables/06-account-structure.md` |
-| 7 | SOW compliance matrix | `docs/sow-compliance-matrix.md` |
+| 7 | SOW 1 compliance matrix | `docs/sow-compliance-matrix.md` |
+| 8 | Security services setup guide (GuardDuty, SecurityHub, Macie, Inspector) | `docs/deliverables/07-security-services-setup-guide.md` |
+| 9 | CIS benchmark alignment report | `docs/deliverables/08-cis-benchmark-alignment.md` |
+| 10 | SOW 2 compliance matrix (Security & Compliance Services) | `docs/sow2-compliance-matrix.md` |
 
 ## Architecture Diagrams
 
