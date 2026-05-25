@@ -17,7 +17,7 @@
 | Security Hub with AWS FSBP | DONE | `deliverables/07-security-services-setup-guide.md` |
 | Security Hub all member accounts connected | DONE | `deliverables/07-security-services-setup-guide.md` |
 | Security Hub finding aggregation | DONE | Cross-region aggregation enabled, all regions linked |
-| AWS Inspector across all accounts | PARTIAL | Not deployed via LZA. Can be enabled manually. See `deliverables/07-security-services-setup-guide.md` for steps. |
+| AWS Inspector across all accounts | DONE | `deliverables/07-security-services-setup-guide.md` (enabled manually, delegated to Audit, all member accounts activated) |
 | **Logging & Visibility** | | |
 | Centralized AWS Config rules | DONE | `deliverables/05-config-cloudtrail-logging.md` (27+ rules) |
 | Compliance rules and remediation alerts | DONE | 2 auto-remediation rules (EC2 instance profile, ELB logging) |
@@ -48,10 +48,8 @@
 
 ## Items to Address
 
-1. **AWS Inspector**: Not deployed via LZA. Enable manually in Audit account as delegated admin. Steps documented in `deliverables/07-security-services-setup-guide.md`. No findings will appear until EC2 instances or ECR images exist.
+1. **CloudWatch Dashboards**: Not deployed by default. Optional — can be created manually or via CloudFormation if the client wants visual dashboards.
 
-2. **CloudWatch Dashboards**: Not deployed by default. Optional — can be created manually or via CloudFormation if the client wants visual dashboards.
+2. **Slack/Webhook Integration**: Optional per SOW. Can be configured using Amazon EventBridge rules → AWS Chatbot (for Slack) or Lambda (for webhooks).
 
-3. **Slack/Webhook Integration**: Optional per SOW. Can be configured using Amazon EventBridge rules → AWS Chatbot (for Slack) or Lambda (for webhooks).
-
-4. **Runbooks**: The deliverable documents serve as operational runbooks. Each document includes verification steps that can be repeated for ongoing monitoring.
+3. **Runbooks**: The deliverable documents serve as operational runbooks. Each document includes verification steps that can be repeated for ongoing monitoring.

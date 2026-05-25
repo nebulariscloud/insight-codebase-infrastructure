@@ -1,0 +1,256 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Reusable template for an EC2 instance migrated from another tenant via AMI copy.
+  One stack per migrated server. Supports optional EIP, secondary EBS volumes,
+  optional Route53 A record, and optional ALB target registration.
+  Deploy standalone via `aws cloudformation deploy` or via LZA customizations-config.
+
+Parameters:
+  # ---- Core instance ----
+  AmiId:
+    Type: AWS::EC2::Image::Id
+    Description: AMI ID in this region (e.g. the copied us-east-2 AMI)
+  InstanceType:
+    Type: String
+    Description: Match the source instance type unless intentionally resizing
+  SubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: Target subnet in the destination VPC
+  SecurityGroupIds:
+    Type: List<AWS::EC2::SecurityGroup::Id>
+    Description: Security groups to attach to the primary ENI
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: SSH key pair available in this region
+  PrivateIp:
+    Type: String
+    Default: ''
+    Description: Optional - pin the instance to a specific private IP in the subnet
+  IamInstanceProfileName:
+    Type: String
+    Default: ''
+    Description: Optional - IAM instance profile name (not ARN)
+  UserDataBase64:
+    Type: String
+    Default: ''
+    Description: Optional - base64-encoded user data
+  ServerName:
+    Type: String
+    Description: Friendly name used in tags (e.g. alfresco-prod, aheeva-db-1)
+
+  # ---- Networking extras ----
+  AllocateEip:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Allocate a new EIP and associate it with the instance
+  ExistingEipAllocationId:
+    Type: String
+    Default: ''
+    Description: Associate an existing EIP allocation ID instead of creating one (eipalloc-...)
+  SourceDestCheck:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: Set to 'false' for NAT/router-style instances
+
+  # ---- Secondary volumes (restored from source snapshots) ----
+  Volume2SnapshotId:
+    Type: String
+    Default: ''
+    Description: Optional - snapshot ID to restore as a second volume
+  Volume2DeviceName:
+    Type: String
+    Default: /dev/sdb
+    Description: Linux device name for second volume (e.g. /dev/sdb, /dev/xvdb)
+  Volume2SizeGiB:
+    Type: Number
+    Default: 0
+    Description: Size in GiB. 0 disables the second volume.
+  Volume2Type:
+    Type: String
+    Default: gp3
+    AllowedValues: [gp3, gp2, io1, io2, st1, sc1]
+
+  Volume3SnapshotId:
+    Type: String
+    Default: ''
+  Volume3DeviceName:
+    Type: String
+    Default: /dev/sdc
+  Volume3SizeGiB:
+    Type: Number
+    Default: 0
+  Volume3Type:
+    Type: String
+    Default: gp3
+    AllowedValues: [gp3, gp2, io1, io2, st1, sc1]
+
+  # ---- DNS ----
+  Route53HostedZoneId:
+    Type: String
+    Default: ''
+    Description: Optional - private or public hosted zone ID
+  Route53RecordName:
+    Type: String
+    Default: ''
+    Description: Optional FQDN ending with a dot (e.g. alfresco.example.com.)
+  Route53UsePublicIp:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: 'true' = point record at EIP/public IP, 'false' = private IP
+
+Conditions:
+  HasPrivateIp:          !Not [!Equals [!Ref PrivateIp, '']]
+  HasInstanceProfile:    !Not [!Equals [!Ref IamInstanceProfileName, '']]
+  HasUserData:           !Not [!Equals [!Ref UserDataBase64, '']]
+  AllocateNewEip:        !Equals [!Ref AllocateEip, 'true']
+  HasExistingEip:        !Not [!Equals [!Ref ExistingEipAllocationId, '']]
+  AssociateAnyEip:       !Or [!Condition AllocateNewEip, !Condition HasExistingEip]
+
+  HasVolume2:            !Not [!Equals [!Ref Volume2SizeGiB, 0]]
+  Volume2FromSnapshot:   !And
+    - !Condition HasVolume2
+    - !Not [!Equals [!Ref Volume2SnapshotId, '']]
+  HasVolume3:            !Not [!Equals [!Ref Volume3SizeGiB, 0]]
+  Volume3FromSnapshot:   !And
+    - !Condition HasVolume3
+    - !Not [!Equals [!Ref Volume3SnapshotId, '']]
+
+  HasDnsRecord:          !And
+    - !Not [!Equals [!Ref Route53HostedZoneId, '']]
+    - !Not [!Equals [!Ref Route53RecordName, '']]
+  DnsTargetsPublicIp:    !Equals [!Ref Route53UsePublicIp, 'true']
+
+Resources:
+  Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref AmiId
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyName
+      SubnetId: !Ref SubnetId
+      SecurityGroupIds: !Ref SecurityGroupIds
+      PrivateIpAddress: !If [HasPrivateIp, !Ref PrivateIp, !Ref AWS::NoValue]
+      IamInstanceProfile: !If [HasInstanceProfile, !Ref IamInstanceProfileName, !Ref AWS::NoValue]
+      UserData: !If [HasUserData, !Ref UserDataBase64, !Ref AWS::NoValue]
+      SourceDestCheck: !Ref SourceDestCheck
+      EbsOptimized: true
+      Monitoring: true
+      Tags:
+        - Key: Name
+          Value: !Ref ServerName
+        - Key: Migrated
+          Value: 'true'
+        - Key: Accelerator
+          Value: AWSAccelerator
+
+  # ---- Secondary volumes ----
+  Volume2:
+    Type: AWS::EC2::Volume
+    Condition: HasVolume2
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      AvailabilityZone: !GetAtt Instance.AvailabilityZone
+      Size: !Ref Volume2SizeGiB
+      VolumeType: !Ref Volume2Type
+      SnapshotId: !If [Volume2FromSnapshot, !Ref Volume2SnapshotId, !Ref AWS::NoValue]
+      Encrypted: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${ServerName}-vol2'
+
+  Volume2Attach:
+    Type: AWS::EC2::VolumeAttachment
+    Condition: HasVolume2
+    Properties:
+      InstanceId: !Ref Instance
+      VolumeId: !Ref Volume2
+      Device: !Ref Volume2DeviceName
+
+  Volume3:
+    Type: AWS::EC2::Volume
+    Condition: HasVolume3
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      AvailabilityZone: !GetAtt Instance.AvailabilityZone
+      Size: !Ref Volume3SizeGiB
+      VolumeType: !Ref Volume3Type
+      SnapshotId: !If [Volume3FromSnapshot, !Ref Volume3SnapshotId, !Ref AWS::NoValue]
+      Encrypted: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${ServerName}-vol3'
+
+  Volume3Attach:
+    Type: AWS::EC2::VolumeAttachment
+    Condition: HasVolume3
+    Properties:
+      InstanceId: !Ref Instance
+      VolumeId: !Ref Volume3
+      Device: !Ref Volume3DeviceName
+
+  # ---- EIP ----
+  NewEip:
+    Type: AWS::EC2::EIP
+    Condition: AllocateNewEip
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub '${ServerName}-eip'
+
+  EipAssociation:
+    Type: AWS::EC2::EIPAssociation
+    Condition: AssociateAnyEip
+    Properties:
+      InstanceId: !Ref Instance
+      AllocationId: !If
+        - AllocateNewEip
+        - !GetAtt NewEip.AllocationId
+        - !Ref ExistingEipAllocationId
+
+  # ---- DNS ----
+  DnsRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: HasDnsRecord
+    Properties:
+      HostedZoneId: !Ref Route53HostedZoneId
+      Name: !Ref Route53RecordName
+      Type: A
+      TTL: '60'
+      ResourceRecords:
+        - !If
+          - DnsTargetsPublicIp
+          - !GetAtt Instance.PublicIp
+          - !GetAtt Instance.PrivateIp
+
+  # ---- ALB / NLB target registration ----
+  # Note: registering an existing instance into an existing target group from
+  # another stack isn't directly supported by CFN. After this stack creates,
+  # run from the account that owns the target group:
+  #   aws elbv2 register-targets \
+  #     --target-group-arn <arn> \
+  #     --targets Id=<InstanceId-from-outputs>,Port=<port>
+
+Outputs:
+  InstanceId:
+    Description: EC2 instance ID
+    Value: !Ref Instance
+  PrivateIp:
+    Description: Primary private IP
+    Value: !GetAtt Instance.PrivateIp
+  AvailabilityZone:
+    Value: !GetAtt Instance.AvailabilityZone
+  EipAddress:
+    Condition: AllocateNewEip
+    Value: !Ref NewEip
+  Volume2Id:
+    Condition: HasVolume2
+    Value: !Ref Volume2
+  Volume3Id:
+    Condition: HasVolume3
+    Value: !Ref Volume3

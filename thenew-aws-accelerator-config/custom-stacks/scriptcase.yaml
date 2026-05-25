@@ -1,0 +1,104 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Scriptcase php 7.3 - migrated from source tenant. Deploys the instance, its
+  security group (SSH from EICE, HTTP/Scriptcase from ingress VPC, MySQL from
+  shared-prod), and tags. Single stack so create/delete is atomic.
+
+Parameters:
+  AmiId:
+    Type: AWS::EC2::Image::Id
+    Default: ami-0f18f64eff2113cd2
+    Description: us-east-2 copy of the Scriptcase AMI
+  InstanceType:
+    Type: String
+    Default: t3a.small
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Default: vpc-04a8720d0ddb40713
+    Description: shared-prod VPC in us-east-2
+  SubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Default: subnet-00d31cac6422417c4
+    Description: app-a subnet (us-east-2a, 10.12.1.0/24)
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Default: scriptcase-key
+  EiceSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: SG of the EC2 Instance Connect Endpoint - SSH inbound source
+  IngressVpcCidr:
+    Type: String
+    Default: 10.0.0.0/20
+    Description: Perimeter ingress VPC CIDR (where the ALB lives)
+  SharedProdVpcCidr:
+    Type: String
+    Default: 10.12.0.0/16
+    Description: shared-prod VPC CIDR (for intra-VPC MySQL access)
+
+Resources:
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Scriptcase php 7.3 - migrated server
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          SourceSecurityGroupId: !Ref EiceSecurityGroupId
+          Description: SSH from EC2 Instance Connect Endpoint
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: !Ref IngressVpcCidr
+          Description: HTTP from ingress ALB (perimeter ingress VPC)
+        - IpProtocol: tcp
+          FromPort: 8091
+          ToPort: 8091
+          CidrIp: !Ref IngressVpcCidr
+          Description: Scriptcase admin UI from ingress ALB
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          CidrIp: !Ref SharedProdVpcCidr
+          Description: MySQL from inside shared-prod VPC
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 0.0.0.0/0
+          Description: All outbound
+      Tags:
+        - Key: Name
+          Value: scriptcase-sg
+        - Key: Migrated
+          Value: 'true'
+
+  Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref AmiId
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyName
+      SubnetId: !Ref SubnetId
+      SecurityGroupIds:
+        - !Ref SecurityGroup
+      EbsOptimized: true
+      Monitoring: true
+      Tags:
+        - Key: Name
+          Value: scriptcase-php-73
+        - Key: Migrated
+          Value: 'true'
+        - Key: DailyBackup
+          Value: 'True'
+
+Outputs:
+  InstanceId:
+    Description: Scriptcase EC2 instance ID
+    Value: !Ref Instance
+  PrivateIp:
+    Description: Private IP - register this with the ingress ALB target group
+    Value: !GetAtt Instance.PrivateIp
+  AvailabilityZone:
+    Value: !GetAtt Instance.AvailabilityZone
+  SecurityGroupId:
+    Value: !Ref SecurityGroup

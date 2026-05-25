@@ -58,6 +58,7 @@ Deployment of AWS Landing Zone Accelerator (LZA) v1.14.1 on AWS Control Tower v4
 | 6 | Centralized logging and monitoring | `docs/diagrams/06-logging-monitoring.md` |
 | 7 | IPAM IP address allocation | `docs/diagrams/07-ipam-allocation.md` |
 | 8 | Compliance standards alignment | `docs/diagrams/08-compliance-standards.md` |
+| 9 | Security services org-wide deployment | `docs/diagrams/09-security-services-deployment.md` |
 
 ## Detailed Documentation
 

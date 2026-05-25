@@ -36,6 +36,16 @@ transitGateways:
             attachment:
               vpcName: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-egress"
               account: Perimeter
+          # Allow ingress VPC to reach shared-prod workloads (and return traffic)
+          - destinationCidrBlock: "{{ HomeRegionProdWorkloadsCidr }}"
+            attachment:
+              vpcName: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-shared-prod"
+              account: Network
+          # Allow shared-prod return traffic to reach ingress VPC
+          - destinationCidrBlock: "{{ HomeRegionIngressCidr }}"
+            attachment:
+              vpcName: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-ingress"
+              account: Perimeter
 
 centralNetworkServices:
   delegatedAdminAccount: Network

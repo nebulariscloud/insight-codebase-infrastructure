@@ -1,0 +1,15 @@
+{
+  "tags": {
+    "BackupPlan": {
+      "tag_key": {
+        "@@assign": "BackupPlan"
+      },
+      "tag_value": {
+        "@@assign": ["Continuous", "Hourly", "Daily", "Weekly", "Monthly"]
+      },
+      "enforced_for": {
+        "@@assign": ["s3:bucket"]
+      }
+    }
+  }
+}

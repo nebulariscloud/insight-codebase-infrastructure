@@ -1,0 +1,71 @@
+###############################################################################################################
+# For additional configurable services, features, and property descriptions,                                  #
+# please review the AccountConfig class reference in our TypeDoc:                                             #
+# https://awslabs.github.io/landing-zone-accelerator-on-aws/latest/user-guide/config/#account-configuration   #
+###############################################################################################################
+
+mandatoryAccounts:
+  # We recommend you do not change mandatory account names. These are used within Landing Zone Accelerator to reference the accounts from other config files.
+  # The "name" value does not currently support spaces
+  # The "name" value DOES NOT need to match the account name
+  - name: Management
+    description: >-
+      The management (primary) account. Do not change the name field for this
+      mandatory account. Note, the account name key does not need to match the
+      AWS account name.
+    email: insightgroup-management@nebulariscloud.com
+    organizationalUnit: Root
+  - name: LogArchive
+    description: >-
+      The log archive account. Do not change the name field for this mandatory
+      account. Note, the account name key does not need to match the AWS account
+      name.
+    email: insightgroup-log-archive@nebulariscloud.com
+    organizationalUnit: Security
+  - name: Audit
+    description: >-
+      The security audit account (also referred to as the audit account). Do not
+      change the name field for this mandatory account. Note, the account name
+      key does not need to match the AWS account name.
+    email: insightgroup-audit@nebulariscloud.com
+    organizationalUnit: Security
+workloadAccounts:
+  # The "name" will be used to set the AWS Account name
+  # The "name" value does not currently support spaces
+  # The "name" value DOES NOT need to match the account name
+  - name: SharedServices
+    description: The SharedServices account
+    email: insightgroup-shared@nebulariscloud.com
+    organizationalUnit: Infrastructure
+  - name: Network
+    description: The Network account
+    email: insightgroup-network@nebulariscloud.com
+    organizationalUnit: Infrastructure
+  - name: Perimeter
+    description: The Perimeter account
+    email: insightgroup-perimeter@nebulariscloud.com
+    organizationalUnit: Infrastructure
+  - name: Production
+    description: Production workloads
+    email: insightgroup-production@nebulariscloud.com
+    organizationalUnit: Workloads/Prod
+  - name: Staging
+    description: Staging and pre-production workloads
+    email: insightgroup-staging@nebulariscloud.com
+    organizationalUnit: Workloads/Test
+  - name: Development
+    description: Code and feature development
+    email: insightgroup-development@nebulariscloud.com
+    organizationalUnit: Workloads/Dev
+  - name: QA
+    description: Quality assurance and integration testing
+    email: insightgroup-qa@nebulariscloud.com
+    organizationalUnit: Workloads/Test
+  - name: UAT
+    description: User acceptance testing
+    email: insightgroup-uat@nebulariscloud.com
+    organizationalUnit: Workloads/Test
+  - name: Sandbox
+    description: Experimentation, PoC work, and learning
+    email: insightgroup-sandbox@nebulariscloud.com
+    organizationalUnit: Workloads/Sandbox

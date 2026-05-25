@@ -1,0 +1,103 @@
+####################################################################################################################
+# customizations-config.yaml                                                                                       #
+# Deploys custom CloudFormation stacks via the LZA pipeline.                                                       #
+# Resources are deployed using the accelerator execution role, bypassing SCPs.                                     #
+####################################################################################################################
+
+customizations:
+  cloudFormationStacks:
+    # Ingress ALB - deployed to the Perimeter account
+    # Production-hardened: WAF enabled, access logs to LZA elb-logs bucket, deletion protection
+    - deploymentTargets:
+        accounts:
+          - Perimeter
+      name: IngressALB
+      description: Internet-facing ALB in the ingress VPC with WAF and access logs
+      template: custom-stacks/ingress-alb.yaml
+      runOrder: 1
+      terminationProtection: false
+      regions:
+        - "{{ HomeRegion }}"
+      parameters:
+        # Hardcoded VPC and subnet IDs from the Perimeter account ingress VPC.
+        # Verified via: aws ssm get-parameter --name /accelerator/network/vpc/...
+        - name: VpcId
+          value: vpc-0f8cbc901a195b148
+        - name: PublicSubnetA
+          value: subnet-0e4b51e5c27c3ffbf
+        - name: PublicSubnetB
+          value: subnet-079c23a68151cc828
+        - name: TargetPort
+          value: '443'
+        - name: TargetProtocol
+          value: HTTPS
+        - name: HealthCheckPath
+          value: /
+        - name: HealthCheckMatcher
+          value: '200,302,401'
+        # WAF: AWS managed rules + rate limiting + IP reputation
+        # Cost: ~$5/month + ~$1/managed rule + $0.60/M requests
+        - name: EnableWaf
+          value: 'true'
+        # Cross-zone LB: 'false' reduces cross-AZ data transfer cost (recommended
+        # since targets are in another VPC via TGW). Set 'true' for higher availability.
+        - name: CrossZoneLoadBalancing
+          value: 'false'
+        # Access logs: requires the LZA elb-access-logs bucket in the Perimeter account.
+        # Currently disabled - bucket doesn't exist in this account.
+        # To enable: verify bucket exists, then set the value below.
+        - name: AccessLogsBucketName
+          value: ''
+        # HTTPS: uncomment when you have an ACM certificate in the Perimeter account.
+        # Steps to add HTTPS:
+        #   1. Create cert in ACM (us-east-2) in the Perimeter account
+        #   2. Validate via DNS (Route 53)
+        #   3. Uncomment and set the ARN below
+        #   4. Re-run the pipeline - the ALB will get an HTTPS listener and HTTP will redirect
+        # - name: CertificateArn
+        #   value: arn:aws:acm:us-east-2:713939170920:certificate/your-cert-id-here
+
+    # ----------------------------------------------------------------------------
+    # Migrated EC2 servers (lift-and-shift from another tenant via copied AMIs)
+    # Template: custom-stacks/migrated-ec2.yaml
+    #
+    # Recommended workflow:
+    #   1. Deploy standalone first via `aws cloudformation deploy` to iterate fast
+    #      during cutover. The template is identical.
+    #   2. Once the server is stable, uncomment the matching block below and let
+    #      the LZA pipeline take ownership.
+    #
+    # Example (Alfresco) - uncomment, fill in IDs, and add accounts entry:
+    # - deploymentTargets:
+    #     accounts:
+    #       - SharedProd        # name of spoke account in accounts-config.yaml
+    #   name: AlfrescoServer
+    #   description: Migrated Alfresco server (was ami-0ed2912346853f6ed in source tenant)
+    #   template: custom-stacks/migrated-ec2.yaml
+    #   runOrder: 10
+    #   terminationProtection: false
+    #   regions:
+    #     - "{{ HomeRegion }}"
+    #   parameters:
+    #     - name: ServerName
+    #       value: alfresco-prod
+    #     - name: AmiId
+    #       value: ami-0eef1ec163e0fc571        # us-east-2 copy
+    #     - name: InstanceType
+    #       value: m5.large
+    #     - name: SubnetId
+    #       value: subnet-XXXXXXXX
+    #     - name: SecurityGroupIds
+    #       value: sg-XXXXXXXX
+    #     - name: KeyName
+    #       value: shared-prod-key
+    #     - name: PrivateIp
+    #       value: ''                            # leave blank unless pinning is required
+    #     - name: IamInstanceProfileName
+    #       value: ''                            # e.g. AWSAccelerator-Default-EC2Profile
+    #     - name: AllocateEip
+    #       value: 'false'
+    #     - name: Route53HostedZoneId
+    #       value: ''
+    #     - name: Route53RecordName
+    #       value: ''

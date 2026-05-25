@@ -95,14 +95,31 @@ Log into the Audit account → IAM Access Analyzer → confirm analyzer is activ
 
 ## AWS Inspector
 
-AWS Inspector is not currently deployed via the LZA configuration. Inspector can be enabled separately in the Audit account as delegated admin and will auto-enroll member accounts.
+| Setting | Value |
+|---|---|
+| Delegated Admin | Audit (021655151355) |
+| Scope | All member accounts (11), all enabled regions |
+| EC2 Scanning | Enabled |
+| ECR Scanning | Enabled |
+| Lambda Standard Scanning | Enabled |
+| Lambda Code Scanning | Enabled |
+| Code Scanning | Enabled |
+| Auto-enable new accounts | Yes |
 
-To enable:
-1. Go to the Management account → AWS Inspector → Settings → Delegated administrator → set Audit account
-2. In the Audit account → Inspector → enable EC2 scanning and ECR container scanning
-3. Inspector will auto-discover EC2 instances and container images across all member accounts
+### How It Works
+- Inspector is enabled via Organizations integration with Audit as delegated admin
+- All member accounts are enrolled and scanning is activated
+- New accounts added to the organization are auto-enrolled
+- Inspector auto-discovers EC2 instances, ECR images, and Lambda functions for vulnerability scanning
+- Findings are aggregated in the Audit account and integrated with Security Hub
+- Management account is excluded (no workloads)
 
-Note: Inspector requires EC2 instances or ECR images to be present to generate findings. Since no workloads are deployed yet, enabling it now will show no findings until instances are launched.
+Note: Inspector was enabled manually (not via LZA) as LZA does not currently support native Inspector configuration.
+
+### Verification
+Log into the Audit account → Inspector → Account management → confirm all 11 member accounts show as Activated with EC2, ECR, Lambda, and Code scanning enabled.
+
+<!-- Insert screenshot: Inspector account management showing all member accounts activated -->
 
 ## SNS Alerting
 
