@@ -1,0 +1,26 @@
+# Terraform working dirs
+.terraform/
+.terraform.lock.hcl.bak
+
+# State files (state lives in S3, never commit local state)
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+
+# Crash logs
+crash.log
+crash.*.log
+
+# Plan output
+*.tfplan
+*.tfplan.*
+
+# tfvars that might contain secrets - use plain *.tfvars only for non-sensitive
+*.auto.tfvars
+*.tfvars
+!example.tfvars
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/

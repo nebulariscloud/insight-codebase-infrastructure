@@ -16,6 +16,8 @@ transitGateways:
     shareTargets:
       organizationalUnits:
         - Infrastructure
+      accounts:
+        - PCI
     asn: {{ TransitGatewayASN }}
     dnsSupport: enable
     vpnEcmpSupport: enable
@@ -45,6 +47,14 @@ transitGateways:
           - destinationCidrBlock: "{{ HomeRegionIngressCidr }}"
             attachment:
               vpcName: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-ingress"
+              account: Perimeter
+      # PCI dedicated TGW route table - isolates PCI workloads from other spokes.
+      # Only the PCI VPC attaches here, and the only route out is to the egress VPC.
+      - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-tgw-rt-pci"
+        routes:
+          - destinationCidrBlock: 0.0.0.0/0
+            attachment:
+              vpcName: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-egress"
               account: Perimeter
 
 centralNetworkServices:
@@ -157,6 +167,23 @@ centralNetworkServices:
           shareTargets:
             accounts:
               - Network
+
+        # PCI IPAM pool - sources from the GLOBAL pool (10.0.0.0/8) because
+        # 10.16.0.0/14 sits outside the existing regional 10.0.0.0/12.
+        # Shared directly to the PCI account (no shared-VPC pattern - PCI gets its
+        # own VPC inside its own account for scope isolation).
+        - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-ipam-pci-pool"
+          description: IP pool allocation for the PCI LZA account
+          locale: "{{ HomeRegion }}"
+          provisionedCidrs:
+            - "{{ HomeRegionPciWorkloadsCidr }}"
+          sourceIpamPool: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-ipam-global-pool"
+          tags:
+            - key: Accelerator
+              value: "{{ AcceleratorPrefix }}"
+          shareTargets:
+            accounts:
+              - PCI
 
   # NO Network Firewall - removed to save ~$570/month
 
@@ -947,6 +974,163 @@ vpcs:
         subnets:
           - "{{ AcceleratorPrefix }}-{{ HomeRegion }}-shared-prod-tgw-a"
           - "{{ AcceleratorPrefix }}-{{ HomeRegion }}-shared-prod-tgw-b"
+    gatewayEndpoints:
+      defaultPolicy: Endpoint-Default
+      endpoints:
+        - service: s3
+        - service: dynamodb
+    useCentralEndpoints: true
+
+  # PCI VPC
+  #  - Deploys directly into the PCI account (NOT shared from Network) to keep PCI scope
+  #    contained inside one auditable account boundary.
+  #  - Three subnet tiers per AZ: public (for the PCI ALB), app (for cardholder data
+  #    workloads), data (for databases - no internet route at all).
+  #  - Attaches to the dedicated tgw-rt-pci route table so PCI cannot reach Dev/Test/Prod
+  #    spokes and they cannot reach PCI. Only egress via the Perimeter egress VPC is allowed.
+  - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci"
+    account: PCI
+    region: "{{ HomeRegion }}"
+    ipamAllocations:
+      - ipamPoolName: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-ipam-pci-pool"
+        netmaskLength: {{ HomeRegionPciVpcMaskLength }}
+    defaultSecurityGroupRulesDeletion: true
+    internetGateway: true
+    enableDnsHostnames: true
+    enableDnsSupport: true
+    instanceTenancy: default
+    routeTables:
+      - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci-rt-public-a"
+        routes:
+          - name: TgwRoute
+            destination: "{{ GlobalCidr }}"
+            type: transitGateway
+            target: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-tgw"
+          - name: Internet
+            destination: 0.0.0.0/0
+            type: internetGateway
+      - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci-rt-public-b"
+        routes:
+          - name: TgwRoute
+            destination: "{{ GlobalCidr }}"
+            type: transitGateway
+            target: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-tgw"
+          - name: Internet
+            destination: 0.0.0.0/0
+            type: internetGateway
+      - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci-rt-app-a"
+        routes:
+          - name: TgwRoute
+            destination: 0.0.0.0/0
+            type: transitGateway
+            target: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-tgw"
+          - name: S3Gateway
+            type: gatewayEndpoint
+            target: s3
+          - name: DynamoDBGateway
+            type: gatewayEndpoint
+            target: dynamodb
+      - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci-rt-app-b"
+        routes:
+          - name: TgwRoute
+            destination: 0.0.0.0/0
+            type: transitGateway
+            target: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-tgw"
+          - name: S3Gateway
+            type: gatewayEndpoint
+            target: s3
+          - name: DynamoDBGateway
+            type: gatewayEndpoint
+            target: dynamodb
+      # Data subnets have NO internet route. Data leaves only via VPC endpoints
+      # or via TGW to other in-scope accounts (none, currently).
+      - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci-rt-data-a"
+        routes:
+          - name: S3Gateway
+            type: gatewayEndpoint
+            target: s3
+          - name: DynamoDBGateway
+            type: gatewayEndpoint
+            target: dynamodb
+      - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci-rt-data-b"
+        routes:
+          - name: S3Gateway
+            type: gatewayEndpoint
+            target: s3
+          - name: DynamoDBGateway
+            type: gatewayEndpoint
+            target: dynamodb
+      - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci-rt-tgw-a"
+        routes: []
+      - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci-rt-tgw-b"
+        routes: []
+    subnets:
+      - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci-public-a"
+        availabilityZone: a
+        routeTable: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci-rt-public-a"
+        ipamAllocation:
+          ipamPoolName: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-ipam-pci-pool"
+          netmaskLength: {{ HomeRegionPciPublicSubnetMaskLength }}
+      - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci-public-b"
+        availabilityZone: b
+        routeTable: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci-rt-public-b"
+        ipamAllocation:
+          ipamPoolName: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-ipam-pci-pool"
+          netmaskLength: {{ HomeRegionPciPublicSubnetMaskLength }}
+      - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci-app-a"
+        availabilityZone: a
+        routeTable: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci-rt-app-a"
+        ipamAllocation:
+          ipamPoolName: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-ipam-pci-pool"
+          netmaskLength: {{ HomeRegionPciAppSubnetMaskLength }}
+      - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci-app-b"
+        availabilityZone: b
+        routeTable: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci-rt-app-b"
+        ipamAllocation:
+          ipamPoolName: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-ipam-pci-pool"
+          netmaskLength: {{ HomeRegionPciAppSubnetMaskLength }}
+      - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci-data-a"
+        availabilityZone: a
+        routeTable: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci-rt-data-a"
+        ipamAllocation:
+          ipamPoolName: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-ipam-pci-pool"
+          netmaskLength: {{ HomeRegionPciDataSubnetMaskLength }}
+      - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci-data-b"
+        availabilityZone: b
+        routeTable: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci-rt-data-b"
+        ipamAllocation:
+          ipamPoolName: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-ipam-pci-pool"
+          netmaskLength: {{ HomeRegionPciDataSubnetMaskLength }}
+      - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci-tgw-a"
+        availabilityZone: a
+        routeTable: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci-rt-tgw-a"
+        ipamAllocation:
+          ipamPoolName: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-ipam-pci-pool"
+          netmaskLength: 28
+        tags:
+          - key: SubnetType
+            value: "{{ AcceleratorPrefix }}-Tgw"
+      - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci-tgw-b"
+        availabilityZone: b
+        routeTable: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci-rt-tgw-b"
+        ipamAllocation:
+          ipamPoolName: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-ipam-pci-pool"
+          netmaskLength: 28
+        tags:
+          - key: SubnetType
+            value: "{{ AcceleratorPrefix }}-Tgw"
+    transitGatewayAttachments:
+      - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci"
+        transitGateway:
+          name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-tgw"
+          account: Network
+        routeTableAssociations:
+          - "{{ AcceleratorPrefix }}-{{ HomeRegion }}-tgw-rt-pci"
+        routeTablePropagations:
+          - "{{ AcceleratorPrefix }}-{{ HomeRegion }}-tgw-rt-firewall"
+        subnets:
+          - "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci-tgw-a"
+          - "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci-tgw-b"
     gatewayEndpoints:
       defaultPolicy: Endpoint-Default
       endpoints:

@@ -1,0 +1,116 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  AWS Global Accelerator fronting the Scriptcase ALB. Provides two static
+  anycast public IPs that vendors can allowlist. The ALB keeps its WAF and
+  listener rules; Global Accelerator only adds static-IP ingress in front of it.
+
+  Deployment notes:
+    - This stack MUST be deployed in us-west-2. AWS Global Accelerator's
+      CloudFormation control plane lives only in us-west-2; the accelerator
+      itself is global and routes to the ALB in any other region.
+    - You must know the ScriptcaseLB ALB ARN before deploying this stack.
+      Get it after the ScriptcaseLB stack (in the Perimeter account, us-east-2)
+      finishes creating:
+        aws elbv2 describe-load-balancers --region us-east-2 \
+          --names scriptcase-lb \
+          --query 'LoadBalancers[0].LoadBalancerArn' --output text
+    - Pass the ARN as the AlbArn parameter.
+
+Parameters:
+  AlbArn:
+    Type: String
+    Description: ARN of the Scriptcase ALB to use as the Global Accelerator endpoint
+  AlbRegion:
+    Type: String
+    Default: us-east-2
+    Description: Region of the Scriptcase ALB (where the EndpointGroup routes to)
+  HealthCheckPort:
+    Type: Number
+    Default: 80
+    Description: Port Global Accelerator uses for health checks against the ALB
+  ClientIpPreservation:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: >
+      Preserve the original client IP through to the ALB. Requires the ALB
+      security group to permit Global Accelerator IP ranges (or 0.0.0.0/0 if
+      already public). Recommended 'true' so WAF rate limits and access logs
+      reflect real client IPs.
+
+Conditions:
+  PreserveClientIp: !Equals [!Ref ClientIpPreservation, 'true']
+
+Resources:
+  Accelerator:
+    Type: AWS::GlobalAccelerator::Accelerator
+    Properties:
+      Name: scriptcase-ga
+      Enabled: true
+      IpAddressType: IPV4
+      Tags:
+        - Key: Name
+          Value: AWSAccelerator-scriptcase-ga
+        - Key: Accelerator
+          Value: AWSAccelerator
+
+  # Listener for HTTPS - vendors typically allowlist + call HTTPS
+  HttpsListener:
+    Type: AWS::GlobalAccelerator::Listener
+    Properties:
+      AcceleratorArn: !Ref Accelerator
+      Protocol: TCP
+      ClientAffinity: NONE
+      PortRanges:
+        - FromPort: 443
+          ToPort: 443
+
+  # Listener for HTTP - kept open so the ALB can do its 80 -> 443 redirect
+  HttpListener:
+    Type: AWS::GlobalAccelerator::Listener
+    Properties:
+      AcceleratorArn: !Ref Accelerator
+      Protocol: TCP
+      ClientAffinity: NONE
+      PortRanges:
+        - FromPort: 80
+          ToPort: 80
+
+  HttpsEndpointGroup:
+    Type: AWS::GlobalAccelerator::EndpointGroup
+    Properties:
+      ListenerArn: !Ref HttpsListener
+      EndpointGroupRegion: !Ref AlbRegion
+      HealthCheckProtocol: TCP
+      HealthCheckPort: !Ref HealthCheckPort
+      HealthCheckIntervalSeconds: 30
+      ThresholdCount: 3
+      EndpointConfigurations:
+        - EndpointId: !Ref AlbArn
+          Weight: 100
+          ClientIPPreservationEnabled: !If [PreserveClientIp, true, false]
+
+  HttpEndpointGroup:
+    Type: AWS::GlobalAccelerator::EndpointGroup
+    Properties:
+      ListenerArn: !Ref HttpListener
+      EndpointGroupRegion: !Ref AlbRegion
+      HealthCheckProtocol: TCP
+      HealthCheckPort: !Ref HealthCheckPort
+      HealthCheckIntervalSeconds: 30
+      ThresholdCount: 3
+      EndpointConfigurations:
+        - EndpointId: !Ref AlbArn
+          Weight: 100
+          ClientIPPreservationEnabled: !If [PreserveClientIp, true, false]
+
+Outputs:
+  AcceleratorArn:
+    Description: ARN of the Global Accelerator
+    Value: !Ref Accelerator
+  AcceleratorDnsName:
+    Description: Default DNS name of the accelerator (CNAME-able)
+    Value: !GetAtt Accelerator.DnsName
+  AcceleratorIps:
+    Description: Two static anycast IPs assigned to this accelerator. Share these with the vendor for allowlisting.
+    Value: !Join [', ', !GetAtt Accelerator.Ipv4Addresses]

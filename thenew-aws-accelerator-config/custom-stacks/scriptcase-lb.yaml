@@ -1,8 +1,10 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >
-  Application Load Balancer in the Ingress VPC public subnets.
-  Production-hardened: access logs, WAF, optional HTTPS, deletion protection.
-  Deployed to the Perimeter account via LZA customizations-config.
+  Application Load Balancer dedicated to Scriptcase, deployed in the Ingress VPC
+  public subnets. Mirrors the production-hardened ingress-alb pattern (WAF,
+  access logs, deletion protection, optional HTTPS) but uses a separate name,
+  security group, target group, WAF, and exports so it can coexist with the
+  primary ingress ALB.
 
 Parameters:
   VpcId:
@@ -16,21 +18,21 @@ Parameters:
     Description: Ingress public subnet B ID
   TargetPort:
     Type: Number
-    Default: 80
-    Description: Port your application server listens on
+    Default: 8091
+    Description: Scriptcase backend port (typically 8091, sometimes 80)
   TargetProtocol:
     Type: String
     Default: HTTP
     AllowedValues: [HTTP, HTTPS]
-    Description: Protocol to use when talking to the backend (HTTPS for Wazuh and similar)
+    Description: Protocol to use when talking to Scriptcase
   HealthCheckPath:
     Type: String
-    Default: /health
+    Default: /
     Description: Health check path for the target group
   HealthCheckMatcher:
     Type: String
-    Default: '200'
-    Description: HTTP status codes considered healthy (e.g. '200' or '200,302')
+    Default: '200,302'
+    Description: HTTP status codes considered healthy for Scriptcase
   CertificateArn:
     Type: String
     Default: ''
@@ -48,7 +50,7 @@ Parameters:
     Description: Enable AWS WAF with AWS managed rules
   CrossZoneLoadBalancing:
     Type: String
-    Default: 'true'
+    Default: 'false'
     AllowedValues: ['true', 'false']
     Description: >
       Cross-zone load balancing. Disable to reduce cross-AZ data transfer costs
@@ -60,11 +62,10 @@ Conditions:
   EnableWafCondition: !Equals [!Ref EnableWaf, 'true']
 
 Resources:
-  # Security Group for the ALB - allows inbound HTTP/HTTPS from the internet
   AlbSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Security group for the ingress ALB - allows internet traffic
+      GroupDescription: Security group for the Scriptcase ALB - allows internet traffic
       VpcId: !Ref VpcId
       SecurityGroupIngress:
         - IpProtocol: tcp
@@ -82,18 +83,17 @@ Resources:
           FromPort: !Ref TargetPort
           ToPort: !Ref TargetPort
           CidrIp: 10.12.0.0/14
-          Description: Allow traffic to shared-prod workloads
+          Description: Allow traffic to shared-prod workloads (Scriptcase)
       Tags:
         - Key: Name
-          Value: AWSAccelerator-ingress-alb-sg
+          Value: AWSAccelerator-scriptcase-lb-sg
         - Key: Accelerator
           Value: AWSAccelerator
 
-  # Application Load Balancer
-  IngressALB:
+  ScriptcaseALB:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Properties:
-      Name: ingress-alb
+      Name: scriptcase-lb
       Scheme: internet-facing
       Type: application
       IpAddressType: ipv4
@@ -122,15 +122,14 @@ Resources:
         - !If
           - HasAccessLogs
           - Key: access_logs.s3.prefix
-            Value: ingress-alb
+            Value: scriptcase-lb
           - !Ref AWS::NoValue
       Tags:
         - Key: Name
-          Value: AWSAccelerator-ingress-alb
+          Value: AWSAccelerator-scriptcase-lb
         - Key: Accelerator
           Value: AWSAccelerator
 
-  # Target Group - IP type for cross-account targets in shared-prod
   TargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
@@ -154,15 +153,14 @@ Resources:
           Value: !Ref CrossZoneLoadBalancing
       Tags:
         - Key: Name
-          Value: AWSAccelerator-ingress-alb-tg
+          Value: AWSAccelerator-scriptcase-lb-tg
         - Key: Accelerator
           Value: AWSAccelerator
 
-  # HTTP Listener - redirects to HTTPS if cert exists, otherwise forwards
   HttpListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
     Properties:
-      LoadBalancerArn: !Ref IngressALB
+      LoadBalancerArn: !Ref ScriptcaseALB
       Port: 80
       Protocol: HTTP
       DefaultActions:
@@ -176,12 +174,11 @@ Resources:
           - Type: forward
             TargetGroupArn: !Ref TargetGroup
 
-  # HTTPS Listener - only created if a certificate ARN is provided
   HttpsListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
     Condition: HasCertificate
     Properties:
-      LoadBalancerArn: !Ref IngressALB
+      LoadBalancerArn: !Ref ScriptcaseALB
       Port: 443
       Protocol: HTTPS
       SslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06
@@ -191,25 +188,23 @@ Resources:
         - Type: forward
           TargetGroupArn: !Ref TargetGroup
 
-  # AWS WAF - protects against common web exploits
   WebAcl:
     Type: AWS::WAFv2::WebACL
     Condition: EnableWafCondition
     Properties:
-      Name: ingress-alb-waf
+      Name: scriptcase-lb-waf
       Scope: REGIONAL
-      Description: WAF for the ingress ALB with AWS managed rules
+      Description: WAF for the Scriptcase ALB with AWS managed rules
       DefaultAction:
         Allow: {}
       VisibilityConfig:
         SampledRequestsEnabled: true
         CloudWatchMetricsEnabled: true
-        MetricName: ingress-alb-waf
+        MetricName: scriptcase-lb-waf
       Rules:
-        # AWS managed rule set - common vulnerabilities (OWASP Top 10 coverage)
-        # Specific sub-rules are set to Count instead of Block because Wazuh's
-        # internal API legitimately triggers them (sends 127.0.0.1 in body for
-        # health checks, large bodies for index pattern lookups, etc.)
+        # AWS managed rule set - common vulnerabilities (OWASP Top 10 coverage).
+        # Run with default actions (no overrides). If a legitimate Scriptcase
+        # request gets blocked in production, add a targeted Count override here.
         - Name: AWS-CommonRuleSet
           Priority: 0
           OverrideAction:
@@ -218,24 +213,10 @@ Resources:
             ManagedRuleGroupStatement:
               VendorName: AWS
               Name: AWSManagedRulesCommonRuleSet
-              RuleActionOverrides:
-                - Name: EC2MetaDataSSRF_BODY
-                  ActionToUse:
-                    Count: {}
-                - Name: SizeRestrictions_BODY
-                  ActionToUse:
-                    Count: {}
-                - Name: GenericRFI_BODY
-                  ActionToUse:
-                    Count: {}
-                - Name: GenericRFI_QUERYARGUMENTS
-                  ActionToUse:
-                    Count: {}
           VisibilityConfig:
             SampledRequestsEnabled: true
             CloudWatchMetricsEnabled: true
             MetricName: AWS-CommonRuleSet
-        # Known bad inputs - blocks common exploit attempts
         - Name: AWS-KnownBadInputs
           Priority: 1
           OverrideAction:
@@ -248,7 +229,6 @@ Resources:
             SampledRequestsEnabled: true
             CloudWatchMetricsEnabled: true
             MetricName: AWS-KnownBadInputs
-        # IP reputation list - blocks known malicious IPs
         - Name: AWS-IPReputation
           Priority: 2
           OverrideAction:
@@ -261,7 +241,6 @@ Resources:
             SampledRequestsEnabled: true
             CloudWatchMetricsEnabled: true
             MetricName: AWS-IPReputation
-        # Rate limiting - protect against DDoS / brute force
         - Name: RateLimit
           Priority: 3
           Action:
@@ -276,34 +255,33 @@ Resources:
             MetricName: RateLimit
       Tags:
         - Key: Name
-          Value: AWSAccelerator-ingress-alb-waf
+          Value: AWSAccelerator-scriptcase-lb-waf
         - Key: Accelerator
           Value: AWSAccelerator
 
-  # Associate WAF with the ALB
   WebAclAssociation:
     Type: AWS::WAFv2::WebACLAssociation
     Condition: EnableWafCondition
     Properties:
-      ResourceArn: !Ref IngressALB
+      ResourceArn: !Ref ScriptcaseALB
       WebACLArn: !GetAtt WebAcl.Arn
 
 Outputs:
   AlbDnsName:
-    Description: DNS name of the Application Load Balancer
-    Value: !GetAtt IngressALB.DNSName
+    Description: DNS name of the Scriptcase Application Load Balancer
+    Value: !GetAtt ScriptcaseALB.DNSName
     Export:
-      Name: ingress-alb-dns
+      Name: scriptcase-lb-dns
   AlbArn:
-    Description: ARN of the Application Load Balancer
-    Value: !Ref IngressALB
+    Description: ARN of the Scriptcase Application Load Balancer
+    Value: !Ref ScriptcaseALB
   TargetGroupArn:
-    Description: ARN of the target group - register your server IPs here
+    Description: ARN of the Scriptcase target group - register Scriptcase IP here
     Value: !Ref TargetGroup
     Export:
-      Name: ingress-alb-tg-arn
+      Name: scriptcase-lb-tg-arn
   SecurityGroupId:
-    Description: Security group ID of the ALB
+    Description: Security group ID of the Scriptcase ALB
     Value: !Ref AlbSecurityGroup
   WafWebAclArn:
     Description: ARN of the WAF Web ACL

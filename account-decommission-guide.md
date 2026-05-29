@@ -12,42 +12,40 @@ Goal: drive `Sandbox`, `Staging`, `QA`, and `UAT` to **near-zero monthly cost** 
 You're going to:
 
 1. **Drain** every billable workload resource in each account (this kills workload cost).
-2. **Move** each account to the `Suspended` OU in `accounts-config.yaml`.
-3. The existing `lza-suspended-guardrails` SCP locks the accounts so nothing can be recreated.
-4. The `ignore: true` flag on the `Suspended` OU tells LZA to stop managing those accounts on every pipeline run.
-5. (Optional) Manually disassociate org-wide security services from those accounts to drive cost to ~$0.
+2. **Manually move** each account to the `Suspended` OU in the AWS Organizations console.
+3. **Remove** the four account entries from `accounts-config.yaml` (LZA's validator requires this when the destination OU has `ignore: true`).
+4. The existing `lza-suspended-guardrails` SCP applies via OU inheritance — locks the accounts so nothing can be recreated.
+5. The `ignore: true` flag on the `Suspended` OU tells LZA to leave those accounts alone on every pipeline run.
+6. (Optional) Manually disassociate org-wide security services from those accounts to drive cost to ~$0.
 
 End state:
 
 - Accounts still exist, still in your AWS Organization, still under your control.
 - Monthly cost depends on how far you take it:
-  - After step 4 only: ~$30–40/account/mo (LZA security baseline keeps running).
-  - After step 5 too: ~$0–1/account/mo.
+  - After steps 2–3 only: ~$30–40/account/mo (LZA security baseline keeps running).
+  - After step 6 too: ~$0–1/account/mo.
 - LZA pipeline is happy. No drift.
-- Reactivation = move the account back to its original OU and run the pipeline.
+- Reactivation = manually move account back to its original OU + re-add to `accounts-config.yaml` + run pipeline.
 
 What you are **not** doing:
 
 - Not closing the AWS accounts.
-- Not deleting account entries from `accounts-config.yaml`.
 - Not removing the `Workloads/Sandbox` or `Workloads/Test` OUs (they may stay empty, that's fine).
 
-### Why move to `Suspended` at all?
+### Why this requires the manual OU move
 
-Fair question — why not just drain the resources and leave each account in its current OU?
+LZA's validator enforces a hard rule: any account listed in `accounts-config.yaml` whose `organizationalUnit` is set to an `ignore: true` OU will fail validation with:
 
-Because LZA enforces desired state on every pipeline run. As long as an account sits in a managed OU (e.g., `Workloads/Test`), every pipeline run will:
+```
+OU Suspended for account QA is ignored. Please remove the account from
+accounts-config.yaml or target a different OU
+```
 
-- Re-enable GuardDuty, Security Hub, Macie, Inspector for that account
-- Recreate LZA-managed KMS keys if you scheduled them for deletion
-- Re-enable AWS Config recorder
-- Re-deploy ~25 Config rules
+The fix is to do both at once: move the account in the AWS Organizations console (so the SCP attaches via OU inheritance), and remove it from `accounts-config.yaml` (so the validator passes). LZA then ignores the account entirely on subsequent runs.
 
-You would be playing whack-a-mole with the pipeline, and any teammate's commit would silently undo your cost-cutting.
+The accounts still belong to your AWS Organization. The Suspended OU's `ignore: true` flag is the supported "pause LZA for this account" switch — it doesn't affect the account ID, email, ownership, or org membership.
 
-The `Suspended` OU has `ignore: true`, which tells LZA to skip those accounts entirely. That's the supported "pause LZA for this account" switch. It doesn't change the account ID, email, ownership, or membership in your organization — it just flips a flag that says "hands off." Reactivation is a one-line YAML change.
-
-LZA's `security-config.yaml` does not support per-account exclusions for GuardDuty / Security Hub / Macie / Inspector. So `Suspended` is the only LZA-native way to stop the security baseline from being re-enforced.
+LZA's `security-config.yaml` does not support per-account exclusions for GuardDuty / Security Hub / Macie / Inspector. So the Suspended OU is the only LZA-native way to stop the security baseline from being re-enforced.
 
 ---
 
@@ -115,13 +113,30 @@ After draining, wait 24–48 hours and re-check Cost Explorer.
 
 ---
 
-## 4. Move accounts to the Suspended OU
+## 4. Suspend the accounts (manual move + remove from config)
 
-This is the LZA-managed lock-down step. After this, the `lza-suspended-guardrails` SCP prevents anyone from spinning resources back up, and `ignore: true` on the OU tells LZA to leave the accounts alone.
+This is the LZA-managed lock-down step. There's a specific gotcha here — LZA's validator **rejects** any account in `accounts-config.yaml` that points at an `ignore: true` OU (like `Suspended`). The error looks like:
 
-### 4a. Edit `thenew-aws-accelerator-config/accounts-config.yaml`
+```
+OU Suspended for account QA is ignored. Please remove the account from
+accounts-config.yaml or target a different OU
+```
 
-Change the `organizationalUnit` field for each of the four accounts. **Leave names, descriptions, and emails untouched** — LZA uses those for matching.
+So the supported flow is **two-part**: manually move the accounts in the AWS Organizations console, then remove them from `accounts-config.yaml`. LZA stops managing them, the Suspended SCP attaches via OU inheritance, and the validator is happy.
+
+### 4a. Manually move the four accounts in AWS Organizations
+
+Sign in to the **management account**:
+
+1. AWS Organizations console → AWS accounts.
+2. Select **Sandbox** → Actions → Move → choose **Suspended** OU → Move.
+3. Repeat for **Staging**, **QA**, **UAT**.
+
+The `Suspended-Guardrails` SCP is attached to the Suspended OU, so it applies to each account immediately via inheritance. You can verify by clicking the account → Policies tab.
+
+### 4b. Edit `thenew-aws-accelerator-config/accounts-config.yaml`
+
+**Remove** the four account blocks entirely (don't just change the OU — that fails validation). Final state of `workloadAccounts`:
 
 ```yaml
 workloadAccounts:
@@ -141,43 +156,32 @@ workloadAccounts:
     description: Production workloads
     email: insightgroup-production@nebulariscloud.com
     organizationalUnit: Workloads/Prod
-  - name: Staging
-    description: Staging and pre-production workloads
-    email: insightgroup-staging@nebulariscloud.com
-    organizationalUnit: Suspended           # was: Workloads/Test
   - name: Development
     description: Code and feature development
     email: insightgroup-development@nebulariscloud.com
     organizationalUnit: Workloads/Dev
-  - name: QA
-    description: Quality assurance and integration testing
-    email: insightgroup-qa@nebulariscloud.com
-    organizationalUnit: Suspended           # was: Workloads/Test
-  - name: UAT
-    description: User acceptance testing
-    email: insightgroup-uat@nebulariscloud.com
-    organizationalUnit: Suspended           # was: Workloads/Test
-  - name: Sandbox
-    description: Experimentation, PoC work, and learning
-    email: insightgroup-sandbox@nebulariscloud.com
-    organizationalUnit: Suspended           # was: Workloads/Sandbox
 ```
 
-### 4b. Do not edit other config files
+(Sandbox, Staging, QA, UAT entries removed.)
 
-You are **not** removing `Workloads/Sandbox` or `Workloads/Test` from `organization-config.yaml` or `global-config.yaml`. Empty OUs are fine and they're ready to receive accounts again later. This keeps reactivation a one-line change.
+> The accounts still exist in AWS Organizations. You're just telling LZA "don't manage these anymore." The original `accounts-config.yaml` is preserved in your zip history if you ever need to copy them back for reactivation.
 
-### 4c. Commit and run the LZA pipeline
+### 4c. Do not edit other config files
 
-- Commit to the branch your CodeCommit / Git repo is wired to.
-- Watch the pipeline. The relevant stages are `Prepare`, `Accounts`, and `Organizations` — these will move accounts and apply the `Suspended-Guardrails` SCP.
-- Expected duration: typical LZA full run, often 1–2 hours depending on regions and account count.
+Leave `organization-config.yaml` and `global-config.yaml` alone. The `Workloads/Sandbox` and `Workloads/Test` OUs become empty after the manual move, but LZA is fine with empty managed OUs.
 
-### 4d. Verify after pipeline success
+### 4d. Zip and upload
 
-- AWS Organizations console: each of the four accounts now sits under `Suspended`.
-- Try to launch a small EC2 instance from one of the accounts (with admin role). The `Suspended-Guardrails` SCP should deny it.
-- Cost Explorer over the next 24–72 hours should show steeply declining cost for those linked accounts.
+- Zip the contents of `thenew-aws-accelerator-config/` (not the folder itself) so the YAML files are at the root of the archive.
+- Upload `aws-accelerator-config.zip` to the LZA config S3 bucket.
+- CodePipeline → AWSAccelerator-Pipeline → Release change.
+
+### 4e. Verify after pipeline success
+
+- Pipeline goes green through `Prepare`, `Accounts`, `Organizations`.
+- AWS Organizations console: Sandbox, Staging, QA, UAT all sit under `Suspended` (already true from step 4a; the pipeline just confirms LZA is no longer trying to manage them).
+- Try launching a small EC2 with admin role in one of them. The `Suspended-Guardrails` SCP should deny it.
+- Cost Explorer over the next 24–72 hours should show declining cost for those linked accounts.
 
 ---
 
@@ -297,15 +301,24 @@ After 5 months in Suspended + hard-park, the account state is:
 - IAM Control Tower / Accelerator roles (`AWSControlTowerExecution`, `AWSAccelerator-*`) are still present and untouched.
 - Account ID, email, billing arrangement: unchanged.
 
-### Step 1 — Edit `accounts-config.yaml` (5 min)
+### Step 1 — Move account out of Suspended in AWS Organizations console
 
-Flip the OU back to its original value:
+Sign in to the management account:
+
+1. AWS Organizations → AWS accounts → select the account (e.g., QA).
+2. Actions → Move → choose the destination OU (e.g., `Workloads/Test`) → Move.
+
+The Suspended SCP detaches automatically; the workload SCPs attached to the destination OU take effect via inheritance.
+
+### Step 2 — Re-add the account to `accounts-config.yaml`
+
+Add the account block back into `workloadAccounts`. Use the same name, description, and email as before:
 
 ```yaml
   - name: QA
     description: Quality assurance and integration testing
     email: insightgroup-qa@nebulariscloud.com
-    organizationalUnit: Workloads/Test    # was: Suspended
+    organizationalUnit: Workloads/Test
 ```
 
 Original OUs for reference:
@@ -314,11 +327,11 @@ Original OUs for reference:
 - `QA` → `Workloads/Test`
 - `UAT` → `Workloads/Test`
 
-Commit and push.
+> Tip: keep a copy of the pre-suspension `accounts-config.yaml` somewhere (your git history or an `aws-accelerator-config-pre-suspension.zip` snapshot) so future-you can copy these blocks verbatim.
 
-### Step 2 — Run the LZA pipeline (1–2 hours, mostly hands-off)
+### Step 3 — Zip, upload, run the LZA pipeline (1–2 hours, mostly hands-off)
 
-What LZA does automatically when the account moves out of `Suspended`:
+What LZA does automatically when the account re-appears in `accounts-config.yaml` and is in a managed OU:
 
 - Removes the `Suspended-Guardrails` SCP.
 - Re-attaches workload SCPs (`Core-Guardrails-1/2`, `Core-Workloads-Guardrails-1`, or `Core-Sandbox-Guardrails-1` for Sandbox).
@@ -333,7 +346,7 @@ What LZA does **not** do automatically:
 
 - Does not re-invite the account into the org-wide security services (Security Hub, GuardDuty, Macie, Inspector). You have to do this manually because LZA doesn't track that you previously disassociated.
 
-### Step 3 — Re-enroll in security services from the Audit account (~10 min)
+### Step 4 — Re-enroll in security services from the Audit account (~10 min)
 
 Sign in to the **Audit** account (delegated admin):
 
@@ -344,14 +357,14 @@ Sign in to the **Audit** account (delegated admin):
 
 Tip: enable "auto-enable for new accounts" in each delegated admin console once you're back in steady state, so future reactivations don't need this step.
 
-### Step 4 — Recreate IAM Access Analyzer (~1 min)
+### Step 5 — Recreate IAM Access Analyzer (~1 min)
 
 In the reactivated account: IAM → Access Analyzer → Create analyzer → Account analyzer with default settings.
 
-### Step 5 — Verify and provision
+### Step 6 — Verify and provision
 
 - Within ~24 hours, Cost Explorer for the account should resume showing the ~$37/month LZA security baseline.
-- Confirm in AWS Organizations console that the account now has the correct workload SCPs attached, not the Suspended one.
+- Confirm in AWS Organizations console that the account now has the correct workload SCPs attached (via inheritance from the destination OU).
 - The account is ready to receive workloads: VPCs, EC2, applications, etc.
 
 ### What survives the round trip
@@ -374,7 +387,8 @@ For empty accounts being reactivated, none of the "lost" items matter. You effec
 
 | Phase | Duration |
 |---|---|
-| Edit YAML + commit | 5 min |
+| Manual OU move in console | 1 min |
+| Edit YAML + zip + upload | 5 min |
 | LZA pipeline run | 1–2 hours, mostly waiting |
 | Re-invite in 4 security services | ~10 min |
 | Recreate Access Analyzer | ~1 min |
@@ -390,13 +404,14 @@ Your config has `quarantineNewAccounts.enable: true`. That SCP is meant for **br
 
 If step 4 (the suspend pipeline run) goes wrong:
 
-- Revert the `accounts-config.yaml` change so the four accounts return to their original OUs.
-- Run the pipeline. The `Suspended-Guardrails` SCP detaches and the workload SCPs reattach.
-- Resources you already deleted in step 3 are **gone** — only the SCP/OU state is reversible. That's why step 3 is staged before step 4.
+- Move the four accounts back to their original OUs in AWS Organizations console (reverse of step 4a).
+- Re-add the four account blocks to `accounts-config.yaml` (you can copy from your previous zip or git history).
+- Zip and re-upload, run the pipeline. The `Suspended-Guardrails` SCP detaches via OU inheritance and the workload SCPs reattach.
+- Resources you already deleted (if any) are **gone** — only the SCP/OU state is reversible.
 
 If you discover after step 4 that you actually need the resources back:
 
-- Move the affected account back to its original OU (per Section 8).
+- Follow the full reactivation flow in Section 8.
 - Recreate resources from snapshots / backups / IaC.
 
 If Section 6 (hard-park) goes wrong before KMS keys are permanently deleted:
@@ -410,7 +425,8 @@ If Section 6 (hard-park) goes wrong before KMS keys are permanently deleted:
 
 | Step | File | What changes |
 |---|---|---|
-| 4a | `thenew-aws-accelerator-config/accounts-config.yaml` | Set `organizationalUnit: Suspended` for the 4 accounts |
+| 4a | (no config file) | Manual move of 4 accounts to Suspended OU in AWS Organizations console |
+| 4b | `thenew-aws-accelerator-config/accounts-config.yaml` | Remove the 4 account entries |
 | 6  | (no config file) | Manual console steps in Audit + each suspended account |
 
 That is the **only** file you need to edit for park-and-freeze. Everything else stays as-is.

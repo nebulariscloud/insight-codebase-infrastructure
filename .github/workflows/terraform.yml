@@ -1,0 +1,241 @@
+###############################################################################
+# Terraform CI for the terraform/live/ tree.
+#
+# - On PR: detects which leaves changed and runs terraform fmt + validate +
+#   plan for each. Posts a sticky PR comment per leaf with the plan output.
+# - On push to main: runs apply for changed leaves, gated by the GitHub
+#   "production" environment (configure required reviewers there).
+#
+# All AWS access happens via OIDC into the GitHubActions-Terraform role in
+# SharedServices, which then chains into TerraformExecution in each spoke.
+# No long-lived AWS keys.
+###############################################################################
+
+name: terraform
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "terraform/live/**"
+      - "terraform/modules/**"
+      - ".github/workflows/terraform.yml"
+  push:
+    branches: [main]
+    paths:
+      - "terraform/live/**"
+      - "terraform/modules/**"
+      - ".github/workflows/terraform.yml"
+  workflow_dispatch:
+    inputs:
+      leaf:
+        description: "Specific leaf path (e.g. terraform/live/perimeter/scriptcase-lb). Empty = all live leaves."
+        required: false
+
+permissions:
+  id-token: write     # required for OIDC
+  contents: read
+  pull-requests: write
+
+env:
+  TF_VERSION: "1.9.5"
+  AWS_REGION: "us-east-2"
+  # Set this in repo or org secrets after running terraform/_bootstrap/.
+  AWS_ROLE_ARN: ${{ secrets.AWS_TF_ROLE_ARN }}
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "0"
+
+jobs:
+  ###########################################################################
+  # 1. Detect which live/ leaves are affected by this change
+  ###########################################################################
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      leaves: ${{ steps.list.outputs.leaves }}
+      any: ${{ steps.list.outputs.any }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine affected leaves
+        id: list
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # If the user pinned a leaf via workflow_dispatch, use that.
+          if [[ -n "${{ github.event.inputs.leaf }}" ]]; then
+            leaves='["${{ github.event.inputs.leaf }}"]'
+            echo "leaves=$leaves" >> "$GITHUB_OUTPUT"
+            echo "any=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.event.pull_request.head.sha }}"
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            base="${{ github.event.before }}"
+            head="${{ github.sha }}"
+          fi
+
+          # Files changed
+          changed=$(git diff --name-only "$base" "$head" || true)
+
+          # If a module changed, plan every live leaf.
+          if echo "$changed" | grep -q '^terraform/modules/'; then
+            mapfile -t leaves < <(find terraform/live -mindepth 2 -maxdepth 2 -type d ! -name '_template' | sort)
+          else
+            mapfile -t leaves < <(echo "$changed" \
+              | grep '^terraform/live/' \
+              | grep -v '^terraform/live/_template/' \
+              | awk -F/ '{ print $1"/"$2"/"$3"/"$4 }' \
+              | sort -u)
+          fi
+
+          if [[ ${#leaves[@]} -eq 0 ]]; then
+            echo "leaves=[]" >> "$GITHUB_OUTPUT"
+            echo "any=false" >> "$GITHUB_OUTPUT"
+          else
+            json=$(printf '%s\n' "${leaves[@]}" | jq -R . | jq -s -c .)
+            echo "leaves=$json" >> "$GITHUB_OUTPUT"
+            echo "any=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  ###########################################################################
+  # 2. Plan every affected leaf in parallel
+  ###########################################################################
+  plan:
+    needs: detect
+    if: needs.detect.outputs.any == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        leaf: ${{ fromJSON(needs.detect.outputs.leaves) }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: gh-tf-plan-${{ github.run_id }}
+
+      - name: terraform fmt
+        working-directory: ${{ matrix.leaf }}
+        run: terraform fmt -check -recursive -diff
+
+      - name: terraform init
+        working-directory: ${{ matrix.leaf }}
+        run: terraform init -input=false
+
+      - name: terraform validate
+        working-directory: ${{ matrix.leaf }}
+        run: terraform validate
+
+      - name: terraform plan
+        id: plan
+        working-directory: ${{ matrix.leaf }}
+        run: |
+          set -o pipefail
+          terraform plan -input=false -no-color -out tfplan \
+            -var-file=terraform.tfvars 2>&1 | tee plan.txt
+          terraform show -no-color tfplan > plan-show.txt
+
+      - name: Upload plan artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: plan-${{ matrix.leaf }}
+          path: |
+            ${{ matrix.leaf }}/tfplan
+            ${{ matrix.leaf }}/plan-show.txt
+          retention-days: 7
+
+      - name: Comment plan on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const plan = fs.readFileSync('${{ matrix.leaf }}/plan-show.txt', 'utf8');
+            const truncated = plan.length > 60000
+              ? plan.slice(0, 60000) + '\n\n... (truncated, see workflow log)'
+              : plan;
+            const body = [
+              '<!-- tf-plan:${{ matrix.leaf }} -->',
+              '### `${{ matrix.leaf }}` plan',
+              '<details><summary>show plan</summary>',
+              '',
+              '```hcl',
+              truncated,
+              '```',
+              '',
+              '</details>',
+            ].join('\n');
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const marker = '<!-- tf-plan:${{ matrix.leaf }} -->';
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+  ###########################################################################
+  # 3. Apply on push to main, gated by the "production" environment
+  ###########################################################################
+  apply:
+    needs: [detect, plan]
+    if: github.event_name == 'push' && needs.detect.outputs.any == 'true'
+    runs-on: ubuntu-latest
+    environment: production    # set required reviewers on this env in repo settings
+    strategy:
+      fail-fast: false
+      max-parallel: 1          # serialize applies; safer for state and review
+      matrix:
+        leaf: ${{ fromJSON(needs.detect.outputs.leaves) }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: gh-tf-apply-${{ github.run_id }}
+
+      - name: terraform init
+        working-directory: ${{ matrix.leaf }}
+        run: terraform init -input=false
+
+      - name: terraform apply
+        working-directory: ${{ matrix.leaf }}
+        run: terraform apply -input=false -auto-approve -var-file=terraform.tfvars

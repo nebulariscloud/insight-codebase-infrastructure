@@ -1,28 +1,39 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >
-  Application Load Balancer in the Ingress VPC public subnets.
-  Production-hardened: access logs, WAF, optional HTTPS, deletion protection.
-  Deployed to the Perimeter account via LZA customizations-config.
+  Public Application Load Balancer for the PCI account. Lives inside the PCI
+  account/VPC to keep PCI scope contained. WAF is configured more aggressively
+  than the standard ingress/Scriptcase ALB - all AWS managed rules block at
+  default, plus rate limiting, plus a stricter generic-RFI rule. Body inspection
+  is enforced.
+
+  This template is intentionally similar in shape to scriptcase-lb.yaml so the
+  patterns are familiar, but it is deployed in a separate account and uses a
+  separate name, SG, target group, WAF, and exports. PCI-specific defaults:
+    - HTTPS-only (no plain HTTP listener with traffic forwarded; HTTP only ever
+      issues a 301 redirect to HTTPS, never serves traffic).
+    - WAF Rate Limit set to 500 (vs 2000 elsewhere) - tighter for PCI workloads.
+    - Body inspection size restrictions left at AWS defaults (8KB).
+    - Logs enabled by default - turn off only if you have a reason.
 
 Parameters:
   VpcId:
     Type: String
-    Description: The Ingress VPC ID
+    Description: The PCI VPC ID
   PublicSubnetA:
     Type: String
-    Description: Ingress public subnet A ID
+    Description: PCI public subnet A ID
   PublicSubnetB:
     Type: String
-    Description: Ingress public subnet B ID
+    Description: PCI public subnet B ID
   TargetPort:
     Type: Number
-    Default: 80
-    Description: Port your application server listens on
+    Default: 443
+    Description: Backend application port (HTTPS to backend recommended for PCI)
   TargetProtocol:
     Type: String
-    Default: HTTP
+    Default: HTTPS
     AllowedValues: [HTTP, HTTPS]
-    Description: Protocol to use when talking to the backend (HTTPS for Wazuh and similar)
+    Description: Protocol used between ALB and target. PCI strongly prefers HTTPS.
   HealthCheckPath:
     Type: String
     Default: /health
@@ -30,70 +41,64 @@ Parameters:
   HealthCheckMatcher:
     Type: String
     Default: '200'
-    Description: HTTP status codes considered healthy (e.g. '200' or '200,302')
+    Description: HTTP status codes considered healthy
   CertificateArn:
     Type: String
-    Default: ''
-    Description: ACM certificate ARN for HTTPS listener (leave empty for HTTP only)
+    Description: ACM certificate ARN for the HTTPS listener (REQUIRED for PCI)
   AccessLogsBucketName:
     Type: String
     Default: ''
     Description: >
-      S3 bucket for ALB access logs. Leave empty to disable access logs.
+      S3 bucket for ALB access logs. Strongly recommended for PCI (req 10.x).
       LZA pattern: aws-accelerator-elb-access-logs-<account-id>-<region>
-  EnableWaf:
-    Type: String
-    Default: 'true'
-    AllowedValues: ['true', 'false']
-    Description: Enable AWS WAF with AWS managed rules
   CrossZoneLoadBalancing:
     Type: String
     Default: 'true'
     AllowedValues: ['true', 'false']
     Description: >
-      Cross-zone load balancing. Disable to reduce cross-AZ data transfer costs
-      when targets are in a different VPC via TGW.
+      Cross-zone load balancing. Default true for PCI (resilience > cost).
 
 Conditions:
-  HasCertificate: !Not [!Equals [!Ref CertificateArn, '']]
   HasAccessLogs: !Not [!Equals [!Ref AccessLogsBucketName, '']]
-  EnableWafCondition: !Equals [!Ref EnableWaf, 'true']
 
 Resources:
-  # Security Group for the ALB - allows inbound HTTP/HTTPS from the internet
   AlbSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Security group for the ingress ALB - allows internet traffic
+      GroupDescription: Security group for the PCI ALB - allows internet HTTPS
       VpcId: !Ref VpcId
       SecurityGroupIngress:
+        # PCI: only allow HTTPS from the internet. HTTP is allowed only for the
+        # 301 redirect listener (it never carries app traffic).
         - IpProtocol: tcp
           FromPort: 80
           ToPort: 80
           CidrIp: 0.0.0.0/0
-          Description: Allow HTTP from internet
+          Description: Allow HTTP for redirect-to-HTTPS only
         - IpProtocol: tcp
           FromPort: 443
           ToPort: 443
           CidrIp: 0.0.0.0/0
           Description: Allow HTTPS from internet
       SecurityGroupEgress:
+        # Egress is intentionally restricted to the PCI app tier only.
         - IpProtocol: tcp
           FromPort: !Ref TargetPort
           ToPort: !Ref TargetPort
-          CidrIp: 10.12.0.0/14
-          Description: Allow traffic to shared-prod workloads
+          CidrIp: 10.16.0.0/14
+          Description: Allow traffic to PCI workloads only
       Tags:
         - Key: Name
-          Value: AWSAccelerator-ingress-alb-sg
+          Value: AWSAccelerator-pci-alb-sg
+        - Key: Compliance
+          Value: PCI-DSS
         - Key: Accelerator
           Value: AWSAccelerator
 
-  # Application Load Balancer
-  IngressALB:
+  PciAlb:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Properties:
-      Name: ingress-alb
+      Name: pci-alb
       Scheme: internet-facing
       Type: application
       IpAddressType: ipv4
@@ -108,7 +113,11 @@ Resources:
         - Key: deletion_protection.enabled
           Value: 'true'
         - Key: routing.http.desync_mitigation_mode
-          Value: defensive
+          Value: strictest
+        - Key: routing.http.xff_client_port.enabled
+          Value: 'true'
+        - Key: routing.http.preserve_host_header.enabled
+          Value: 'true'
         - !If
           - HasAccessLogs
           - Key: access_logs.s3.enabled
@@ -122,15 +131,16 @@ Resources:
         - !If
           - HasAccessLogs
           - Key: access_logs.s3.prefix
-            Value: ingress-alb
+            Value: pci-alb
           - !Ref AWS::NoValue
       Tags:
         - Key: Name
-          Value: AWSAccelerator-ingress-alb
+          Value: AWSAccelerator-pci-alb
+        - Key: Compliance
+          Value: PCI-DSS
         - Key: Accelerator
           Value: AWSAccelerator
 
-  # Target Group - IP type for cross-account targets in shared-prod
   TargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
@@ -152,38 +162,38 @@ Resources:
           Value: '30'
         - Key: load_balancing.cross_zone.enabled
           Value: !Ref CrossZoneLoadBalancing
+        - Key: stickiness.enabled
+          Value: 'false'
       Tags:
         - Key: Name
-          Value: AWSAccelerator-ingress-alb-tg
+          Value: AWSAccelerator-pci-alb-tg
+        - Key: Compliance
+          Value: PCI-DSS
         - Key: Accelerator
           Value: AWSAccelerator
 
-  # HTTP Listener - redirects to HTTPS if cert exists, otherwise forwards
-  HttpListener:
+  # HTTP only ever redirects to HTTPS. No conditional - PCI never serves app
+  # traffic over plaintext HTTP.
+  HttpRedirectListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
     Properties:
-      LoadBalancerArn: !Ref IngressALB
+      LoadBalancerArn: !Ref PciAlb
       Port: 80
       Protocol: HTTP
       DefaultActions:
-        - !If
-          - HasCertificate
-          - Type: redirect
-            RedirectConfig:
-              Protocol: HTTPS
-              Port: '443'
-              StatusCode: HTTP_301
-          - Type: forward
-            TargetGroupArn: !Ref TargetGroup
+        - Type: redirect
+          RedirectConfig:
+            Protocol: HTTPS
+            Port: '443'
+            StatusCode: HTTP_301
 
-  # HTTPS Listener - only created if a certificate ARN is provided
   HttpsListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
-    Condition: HasCertificate
     Properties:
-      LoadBalancerArn: !Ref IngressALB
+      LoadBalancerArn: !Ref PciAlb
       Port: 443
       Protocol: HTTPS
+      # TLS 1.3 / 1.2 only. ELBSecurityPolicy-TLS13-1-2-2021-06 is FIPS-compatible.
       SslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06
       Certificates:
         - CertificateArn: !Ref CertificateArn
@@ -191,25 +201,20 @@ Resources:
         - Type: forward
           TargetGroupArn: !Ref TargetGroup
 
-  # AWS WAF - protects against common web exploits
+  # PCI-tuned WAF. All managed rules block by default. Rate limit is tighter.
   WebAcl:
     Type: AWS::WAFv2::WebACL
-    Condition: EnableWafCondition
     Properties:
-      Name: ingress-alb-waf
+      Name: pci-alb-waf
       Scope: REGIONAL
-      Description: WAF for the ingress ALB with AWS managed rules
+      Description: WAF for the PCI ALB - PCI-tuned defaults
       DefaultAction:
         Allow: {}
       VisibilityConfig:
         SampledRequestsEnabled: true
         CloudWatchMetricsEnabled: true
-        MetricName: ingress-alb-waf
+        MetricName: pci-alb-waf
       Rules:
-        # AWS managed rule set - common vulnerabilities (OWASP Top 10 coverage)
-        # Specific sub-rules are set to Count instead of Block because Wazuh's
-        # internal API legitimately triggers them (sends 127.0.0.1 in body for
-        # health checks, large bodies for index pattern lookups, etc.)
         - Name: AWS-CommonRuleSet
           Priority: 0
           OverrideAction:
@@ -218,24 +223,10 @@ Resources:
             ManagedRuleGroupStatement:
               VendorName: AWS
               Name: AWSManagedRulesCommonRuleSet
-              RuleActionOverrides:
-                - Name: EC2MetaDataSSRF_BODY
-                  ActionToUse:
-                    Count: {}
-                - Name: SizeRestrictions_BODY
-                  ActionToUse:
-                    Count: {}
-                - Name: GenericRFI_BODY
-                  ActionToUse:
-                    Count: {}
-                - Name: GenericRFI_QUERYARGUMENTS
-                  ActionToUse:
-                    Count: {}
           VisibilityConfig:
             SampledRequestsEnabled: true
             CloudWatchMetricsEnabled: true
             MetricName: AWS-CommonRuleSet
-        # Known bad inputs - blocks common exploit attempts
         - Name: AWS-KnownBadInputs
           Priority: 1
           OverrideAction:
@@ -248,7 +239,6 @@ Resources:
             SampledRequestsEnabled: true
             CloudWatchMetricsEnabled: true
             MetricName: AWS-KnownBadInputs
-        # IP reputation list - blocks known malicious IPs
         - Name: AWS-IPReputation
           Priority: 2
           OverrideAction:
@@ -261,14 +251,40 @@ Resources:
             SampledRequestsEnabled: true
             CloudWatchMetricsEnabled: true
             MetricName: AWS-IPReputation
-        # Rate limiting - protect against DDoS / brute force
-        - Name: RateLimit
+        # SQL injection rules - relevant to PCI cardholder DB workloads.
+        - Name: AWS-SQLi
           Priority: 3
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesSQLiRuleSet
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: AWS-SQLi
+        # Linux protection rules
+        - Name: AWS-Linux
+          Priority: 4
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesLinuxRuleSet
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: AWS-Linux
+        # Tighter rate limit for PCI - 500/5min/IP
+        - Name: RateLimit
+          Priority: 5
           Action:
             Block: {}
           Statement:
             RateBasedStatement:
-              Limit: 2000
+              Limit: 500
               AggregateKeyType: IP
           VisibilityConfig:
             SampledRequestsEnabled: true
@@ -276,36 +292,35 @@ Resources:
             MetricName: RateLimit
       Tags:
         - Key: Name
-          Value: AWSAccelerator-ingress-alb-waf
+          Value: AWSAccelerator-pci-alb-waf
+        - Key: Compliance
+          Value: PCI-DSS
         - Key: Accelerator
           Value: AWSAccelerator
 
-  # Associate WAF with the ALB
   WebAclAssociation:
     Type: AWS::WAFv2::WebACLAssociation
-    Condition: EnableWafCondition
     Properties:
-      ResourceArn: !Ref IngressALB
+      ResourceArn: !Ref PciAlb
       WebACLArn: !GetAtt WebAcl.Arn
 
 Outputs:
   AlbDnsName:
-    Description: DNS name of the Application Load Balancer
-    Value: !GetAtt IngressALB.DNSName
+    Description: DNS name of the PCI Application Load Balancer
+    Value: !GetAtt PciAlb.DNSName
     Export:
-      Name: ingress-alb-dns
+      Name: pci-alb-dns
   AlbArn:
-    Description: ARN of the Application Load Balancer
-    Value: !Ref IngressALB
+    Description: ARN of the PCI Application Load Balancer
+    Value: !Ref PciAlb
   TargetGroupArn:
-    Description: ARN of the target group - register your server IPs here
+    Description: ARN of the PCI target group - register in-scope workloads here
     Value: !Ref TargetGroup
     Export:
-      Name: ingress-alb-tg-arn
+      Name: pci-alb-tg-arn
   SecurityGroupId:
-    Description: Security group ID of the ALB
+    Description: Security group ID of the PCI ALB
     Value: !Ref AlbSecurityGroup
   WafWebAclArn:
     Description: ARN of the WAF Web ACL
-    Condition: EnableWafCondition
     Value: !GetAtt WebAcl.Arn

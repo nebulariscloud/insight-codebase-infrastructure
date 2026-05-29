@@ -23,6 +23,19 @@ policySets:
       #   - https://docs.aws.amazon.com/systems-manager/latest/userguide/setup-instance-permissions.html
       - name: "{{ AcceleratorPrefix }}-Default-SSM-S3-Policy"
         policy: iam-policies/ssm-s3-policy.json
+      # Permissions for the per-account TerraformExecution role assumed by humans
+      # (via Identity Center) and CI (via OIDC role-chain) from SharedServices.
+      #
+      # Split into two managed policies (Allow + Deny) because the combined
+      # document exceeded the IAM managed-policy 6144-character limit. Both
+      # are attached to TerraformExecution; IAM evaluates them together and
+      # explicit Deny still wins over any Allow.
+      #
+      # See terraform/README.md for the boundary rules between LZA and Terraform.
+      - name: "{{ AcceleratorPrefix }}-Terraform-Execution-Allow"
+        policy: iam-policies/terraform-execution-allow-policy.json
+      - name: "{{ AcceleratorPrefix }}-Terraform-Execution-Deny"
+        policy: iam-policies/terraform-execution-deny-policy.json
 
 roleSets:
   - deploymentTargets:
@@ -53,5 +66,26 @@ roleSets:
           customerManaged:
             - "{{ AcceleratorPrefix }}-Default-SSM-S3-Policy"
         boundaryPolicy: "{{ AcceleratorPrefix }}-End-User-Policy"
+
+      # TerraformExecution - the role Terraform assumes inside every spoke.
+      # Trusted principal: the SharedServices account (the "tooling" hub). Humans
+      # reach it via Identity Center; CI reaches it via the GitHub OIDC role
+      # provisioned in SharedServices. The actual gate on who can assume is the
+      # set of principals in SharedServices, not this trust policy.
+      #
+      # The role is excluded from Management (LZA owns that account directly).
+      # Deployed to Root OU = present in every spoke from day one, including
+      # spokes added later by LZA.
+      #
+      # See terraform/README.md for the full credential model and operating
+      # contract between LZA and Terraform.
+      - name: TerraformExecution
+        assumedBy:
+          - type: account
+            principal: SharedServices
+        policies:
+          customerManaged:
+            - "{{ AcceleratorPrefix }}-Terraform-Execution-Allow"
+            - "{{ AcceleratorPrefix }}-Terraform-Execution-Deny"
 groupSets: []
 userSets: []
