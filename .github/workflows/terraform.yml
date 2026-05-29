@@ -129,6 +129,12 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: gh-tf-plan-${{ github.run_id }}
 
+      - name: Sanitize leaf id for artifact naming
+        id: ids
+        run: |
+          leaf_id="$(echo '${{ matrix.leaf }}' | tr '/' '-')"
+          echo "leaf_id=$leaf_id" >> "$GITHUB_OUTPUT"
+
       - name: terraform fmt
         working-directory: ${{ matrix.leaf }}
         run: terraform fmt -check -recursive -diff
@@ -153,7 +159,7 @@ jobs:
       - name: Upload plan artifact
         uses: actions/upload-artifact@v4
         with:
-          name: plan-${{ matrix.leaf }}
+          name: plan-${{ steps.ids.outputs.leaf_id }}
           path: |
             ${{ matrix.leaf }}/tfplan
             ${{ matrix.leaf }}/plan-show.txt

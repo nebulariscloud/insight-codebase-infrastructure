@@ -1,0 +1,4 @@
+# This leaf's tfvars contains only the account label and public 12-digit
+# account ID. Both safe to commit. Override the parent gitignore so CI can
+# read them via -var-file=terraform.tfvars without leaking credentials.
+!terraform.tfvars
