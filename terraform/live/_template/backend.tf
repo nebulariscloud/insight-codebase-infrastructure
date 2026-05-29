@@ -1,7 +1,6 @@
 terraform {
   backend "s3" {
-    # CHANGE: replace <sharedservices-account-id> after running _bootstrap
-    bucket = "lza-terraform-state-<sharedservices-account-id>"
+    bucket = "lza-terraform-state-547368325532"
 
     # CHANGE: unique per leaf - "live/<account>/<stack-name>/terraform.tfstate"
     key = "live/__account__/__stack__/terraform.tfstate"
