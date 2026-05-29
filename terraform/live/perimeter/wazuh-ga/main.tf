@@ -7,6 +7,10 @@
 #
 # The IngressALB itself is owned by the LZA pipeline (custom-stacks/
 # ingress-alb.yaml). Don't manage it from Terraform - just point GA at it.
+#
+# As of the wazuh-nlb stack, this accelerator also fronts the new NLB on
+# 1514/1515 for Wazuh agent events and enrollment. Same two anycast IPs
+# now serve all four ports: 80/443 (-> ALB) and 1514/1515 (-> NLB).
 ###############################################################################
 
 # Discover the IngressALB in us-east-2. Lookup by name (set by LZA's
@@ -15,6 +19,14 @@
 data "aws_lb" "ingress" {
   provider = aws.alb_region
   name     = var.alb_name
+}
+
+# Discover the wazuh-nlb in the same account/region. Lives in
+# terraform/live/perimeter/wazuh-nlb. Like the ALB lookup above, by name
+# instead of remote_state so a recreate Just Works on next plan.
+data "aws_lb" "wazuh_nlb" {
+  provider = aws.alb_region
+  name     = var.nlb_name
 }
 
 module "ga" {
@@ -47,6 +59,50 @@ module "ga" {
 }
 
 ###############################################################################
+# Wazuh agent listener (1514-1515) on the same accelerator -> NLB
+#
+# The GA module above only models a single listener+endpoint pair (matches
+# the ScriptcaseGA pattern). Extend the same accelerator with raw GA
+# resources for the NLB path rather than reshape the module.
+#
+# One listener covers both ports as a contiguous range. GA preserves the
+# original destination port, so traffic on :1514 hits the NLB's :1514
+# listener and traffic on :1515 hits its :1515 listener.
+###############################################################################
+
+resource "aws_globalaccelerator_listener" "wazuh_agent" {
+  accelerator_arn = module.ga.accelerator_arn
+  protocol        = "TCP"
+  client_affinity = "NONE"
+
+  port_range {
+    from_port = var.agent_event_port
+    to_port   = var.agent_enroll_port
+  }
+}
+
+resource "aws_globalaccelerator_endpoint_group" "wazuh_agent" {
+  listener_arn          = aws_globalaccelerator_listener.wazuh_agent.id
+  endpoint_group_region = var.alb_region
+
+  # Probe the NLB on the events port. Both NLB target groups have TCP
+  # health checks against the Wazuh manager directly, so this just
+  # confirms the NLB itself is up.
+  health_check_port             = var.agent_event_port
+  health_check_interval_seconds = 30
+  threshold_count               = 3
+
+  endpoint_configuration {
+    endpoint_id = data.aws_lb.wazuh_nlb.arn
+    weight      = 100
+    # Preserve client IP all the way through: GA -> NLB -> EC2. The NLB
+    # target groups already have preserve_client_ip = "true", so the Wazuh
+    # manager sees the real agent source IP.
+    client_ip_preservation_enabled = true
+  }
+}
+
+###############################################################################
 # Outputs - the static IPs are the whole point. Share with vendors.
 ###############################################################################
 
@@ -68,4 +124,9 @@ output "accelerator_arn" {
 output "alb_arn_attached" {
   description = "ARN of the ALB the accelerator is fronting (for verification)."
   value       = data.aws_lb.ingress.arn
+}
+
+output "nlb_arn_attached" {
+  description = "ARN of the NLB the 1514-1515 listener is forwarding to (for verification)."
+  value       = data.aws_lb.wazuh_nlb.arn
 }
