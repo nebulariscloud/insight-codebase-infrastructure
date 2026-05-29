@@ -3,119 +3,120 @@
 Internet-facing Network Load Balancer in the Perimeter ingress VPC that
 provides:
 
-- **Static IPs** (one EIP per AZ) for customers to allowlist.
 - **TCP listeners on 1514 / 1515** for Wazuh agent events and enrollment.
-  The existing ALB cannot carry these (ALB is HTTP-only).
+  The existing ALB cannot carry these because ALBs are HTTP-only.
 - **TCP listener on 443** that forwards to the existing LZA-managed ALB
-  (`ingress-alb`), so dashboard / API traffic still flows through the WAF.
+  (`ingress-alb`), so dashboard / API traffic can flow over the same NLB
+  while keeping the WAF in front of the ALB.
 
-## Why this exists
+## Static IPs (important)
 
-The existing `wazuh-ga` (Global Accelerator) only has listeners for 80/443.
-Wazuh agents on 1514/1515 silently timeout because there's no path for raw
-TCP. ALBs cannot carry raw TCP, so the fix is an NLB:
+Originally this stack allocated EIPs on the NLB. The Infrastructure-OU SCP
+(`lza-infrastructure-guardrails-1`) denies `ec2:AllocateAddress`, so EIPs
+are off (`allocate_eips = false`). Instead the NLB is fronted by the
+existing **`wazuh-ga`** Global Accelerator, which already exposes two
+stable anycast IPs. Once `wazuh-ga` is updated to add 1514/1515 listeners
+pointing at this NLB, the same two GA IPs serve everything.
+
+## Architecture
 
 ```
 clients
    │  443 / 1514 / 1515
    ▼
-NLB (this stack, EIPs)
- ├── :443   ──► ingress-alb (LZA-managed)  ──► Wazuh dashboard / API
- ├── :1514  ──► Wazuh manager IP (TGW)     ──► raw TCP, no ALB hop
- └── :1515  ──► Wazuh manager IP (TGW)     ──► raw TCP, no ALB hop
+wazuh-ga  (Global Accelerator, 2 static anycast IPs - sibling stack)
+ ├── :443   ──► ingress-alb (LZA-managed, HTTPS, WAF)
+ └── :1514  ──► wazuh-nlb (this stack)
+ └── :1515  ──► wazuh-nlb (this stack)
+                      │
+                      ├── :443   ──► ingress-alb target  (HTTPS, WAF)
+                      ├── :1514  ──► Wazuh manager IP   (raw TCP, TGW)
+                      └── :1515  ──► Wazuh manager IP   (raw TCP, TGW)
 ```
 
-The `wazuh-ga` leaf can stay alongside until consumers cut over to the NLB
-EIPs. Once everyone's migrated, destroy that stack to drop the GA cost.
+The `:443` listener on the NLB exists so the GA->NLB->ALB path works for
+HTTPS too (single accelerator listener forwarding all three ports). It
+overlaps with the GA's existing ALB endpoint group on 443 - keep whichever
+is simpler once it's stable.
 
 ## What this owns
 
-- `aws_lb` (NLB) + one `aws_eip` per public subnet
+- `aws_lb` (NLB, no EIPs)
 - One security group on the NLB
 - Three listeners (443 → ALB target, 1514 → IP target, 1515 → IP target)
 - Three target groups + attachments
+
+Cross-VPC IP target attachments use `availability_zone = "all"` because
+the Wazuh manager (`10.12.1.121`) lives in shared-prod, reached from
+Perimeter via TGW. Without this, AWS rejects target registration with
+"The Availability Zone is required for IP address ... because it is not
+in the VPC".
 
 ## What this does NOT own
 
 - `ingress-alb` ALB (LZA owns it via `custom-stacks/ingress-alb.yaml`)
 - Wazuh manager EC2 (lives in shared-prod / Production)
-- Route53 records — add a separate `dns` leaf later if you want a friendly
-  hostname pointing at `module.nlb.nlb_dns_name`
-- The Wazuh manager security group's inbound rules. Those still need to allow
-  1514/1515 from client IPs (or from the ingress VPC CIDR if you flip
-  `preserve_client_ip = false`)
+- The Wazuh manager security group (still needs inbound 1514/1515)
+- The wazuh-ga accelerator and its 1514/1515 listeners (sibling stack -
+  add those there in a separate commit after this stack is applied)
 
 ## First-time setup
 
-1. Get the inputs from CloudShell — see `example.tfvars` for the discovery
-   commands.
-2. Copy `example.tfvars` → `terraform.tfvars` and fill in
-   `wazuh_manager_ips`. The other values are already pulled from the existing
-   `IngressALB` CloudFormation parameters.
-3. Run:
+1. Set `wazuh_manager_ips` in `terraform.tfvars`.
+2. Run from your laptop (CloudShell is too disk-constrained for terraform
+   init):
 
    ```bash
    cd terraform/live/perimeter/wazuh-nlb
    aws sso login --profile lza-tooling
    export AWS_PROFILE=lza-tooling
    terraform init
-   terraform plan -out tfplan
+   terraform plan -out tfplan -var-file=terraform.tfvars
    terraform apply tfplan
    ```
 
-4. Grab the static IPs:
+   Or via CI: push to `main`, approve the `production` environment.
 
-   ```bash
-   terraform output static_ips
-   ```
+3. Output `nlb_arn` becomes the input for the `wazuh-ga` stack's
+   1514/1515 listeners (next commit).
 
-   Share those with whoever runs the agents.
+## Verifying the NLB itself
 
-## Verifying it works
-
-From any host that can reach the internet (or CloudShell):
+After apply, the NLB has a DNS name (`module.nlb.nlb_dns_name`). You can
+test it directly to validate the LB layer before wiring up GA:
 
 ```bash
-# Replace with one of the EIPs from `terraform output static_ips`
-NLB_IP=<eip>
+NLB_DNS=$(terraform output -raw nlb_dns_name)
 
-# 443 - should hit the ALB and respond (200/302/401 depending on path)
-curl -kI https://$NLB_IP/
+# 443 -> ALB
+curl -kI https://$NLB_DNS/
 
-# 1514 / 1515 - raw TCP. nc is the right tool here, not curl.
-nc -zv $NLB_IP 1514 -w 5
-nc -zv $NLB_IP 1515 -w 5
+# 1514 / 1515 -> manager
+nc -zv $NLB_DNS 1514 -w 5
+nc -zv $NLB_DNS 1515 -w 5
 ```
 
-`nc` should print `succeeded`. If it says `Connection refused`, the NLB is
-reachable but the Wazuh manager isn't listening. If it says `timed out`,
-either the NLB SG, the manager SG, or the TGW route is dropping traffic.
+If `nc` says `succeeded`, the NLB and TGW path are good. `Connection
+refused` means the manager isn't listening. `timed out` means the manager
+SG is blocking the traffic.
 
 ## Wazuh manager SG checklist
 
-The manager EC2 (in shared-prod) needs an SG rule:
+The manager EC2 (in shared-prod) needs an SG rule allowing 1514/1515
+inbound. Because `preserve_client_ip = true` on the IP target groups, the
+source IPs the manager sees will be the real agent IPs, not the NLB.
 
-- Inbound TCP 1514 from `0.0.0.0/0` (because `preserve_client_ip = true`)
-- Inbound TCP 1515 from `0.0.0.0/0` (same reason)
+- TCP 1514 from `0.0.0.0/0`
+- TCP 1515 from `0.0.0.0/0`
 
 If you'd rather keep the manager SG tight, set
-`preserve_client_ip = false` on the two IP target groups in `main.tf`. Then
-the manager only needs to allow the Perimeter ingress VPC CIDR — but you
-lose real client IPs in the Wazuh logs.
+`preserve_client_ip = "false"` on the two IP target groups in `main.tf`
+and re-apply, then the manager only needs the Perimeter ingress VPC CIDR
+(but you lose real client IPs in Wazuh's logs).
 
 ## Cost
 
 - NLB: ~$16/month + ~$0.006 per LCU-hour
-- Two EIPs attached to the NLB: free (EIPs are only billed when unattached)
-- No additional GA / WAF / ALB costs - the NLB rides on top of what's already
-  there
-
-## Cutover from Global Accelerator
-
-The existing `wazuh-ga` stack continues to work (for 80/443). Migration:
-
-1. Apply this stack. Pull the NLB EIPs.
-2. Update DNS / customer allowlists to point at the NLB EIPs instead of the
-   GA anycast IPs.
-3. Once traffic confirms moved (CloudWatch -> ALB / NLB request count),
-   `terraform destroy` the `wazuh-ga` leaf to stop the ~$18/month GA fee.
+- No EIPs (SCP-blocked)
+- No additional GA / WAF / ALB costs - the NLB rides on top of what's
+  already there
