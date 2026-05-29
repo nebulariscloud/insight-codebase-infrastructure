@@ -1,0 +1,4 @@
+# This leaf's tfvars contains only the account label, public account ID, and
+# AWS resource names - all safe to commit. Override the parent gitignore so
+# CI can read it via -var-file=terraform.tfvars.
+!terraform.tfvars
