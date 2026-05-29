@@ -53,11 +53,3 @@ drop ip $HOME_REGION_PROD_POOL any -> $HOME_REGION_TEST_POOL any (sid:9999;)
 ####################
 
 drop ip any any -> any any (sid:30000;msg:"Default drop";)
-
-
-export AWS_ACCESS_KEY_ID="REDACTED_AWS_ACCESS_KEY"
-export AWS_SECRET_ACCESS_KEY="REDACTED_AWS_SECRET_KEY"
-export AWS_SESSION_TOKEN="REDACTED_AWS_SESSION_TOKEN"
-"AccessKeyId": "REDACTED_AWS_ACCESS_KEY",
-        "SecretAccessKey": "REDACTED_AWS_SECRET_KEY",
-        "SessionToken": "REDACTED_AWS_SESSION_TOKEN",
