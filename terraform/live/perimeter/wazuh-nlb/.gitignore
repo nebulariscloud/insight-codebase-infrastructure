@@ -1,0 +1,22 @@
+.terraform/
+.terraform.tfstate.lock.info
+terraform.tfstate
+terraform.tfstate.*
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+
+# tfplan binaries (output from `terraform plan -out tfplan`)
+tfplan
+plan.txt
+plan-show.txt
+
+# Note: terraform.tfvars IS committed in this repo. It contains
+# non-secret values (account IDs, VPC IDs) needed by the GitHub Actions
+# workflow which runs `terraform plan -var-file=terraform.tfvars`.
+# Match the wazuh-ga / scriptcase-ga sibling pattern.
