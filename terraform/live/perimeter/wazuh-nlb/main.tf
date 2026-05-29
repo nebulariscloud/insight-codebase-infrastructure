@@ -51,13 +51,15 @@ resource "aws_security_group" "nlb" {
 }
 
 # 443 from the world (dashboard / API)
+# Description chars must match AWS allowlist: a-zA-Z0-9 . _ - : / ( ) # , @ [ ] + = & ; { } ! $ *
+# (no '>' or other arrows)
 resource "aws_vpc_security_group_ingress_rule" "https_world" {
   security_group_id = aws_security_group.nlb.id
   cidr_ipv4         = "0.0.0.0/0"
   from_port         = var.https_port
   to_port           = var.https_port
   ip_protocol       = "tcp"
-  description       = "HTTPS from internet -> ALB target"
+  description       = "HTTPS from internet to ALB target"
 }
 
 # 1514 / 1515 - configurable source CIDRs (defaults to world, tighten in tfvars)
@@ -90,7 +92,7 @@ resource "aws_vpc_security_group_egress_rule" "to_alb" {
   from_port         = var.https_port
   to_port           = var.https_port
   ip_protocol       = "tcp"
-  description       = "To ALB target (HTTPS)"
+  description       = "To ALB target HTTPS"
 }
 
 resource "aws_vpc_security_group_egress_rule" "to_wazuh_event" {
@@ -122,8 +124,13 @@ module "nlb" {
   vpc_id     = var.ingress_vpc_id
   subnet_ids = var.public_subnet_ids
 
-  # Each subnet gets its own EIP. Two subnets -> two static IPs to publish.
-  allocate_eips = true
+  # NOTE: EIPs are off because the org SCP (lza-infrastructure-guardrails-1)
+  # denies ec2:AllocateAddress in this OU. The NLB still gets stable
+  # AWS-managed public IPs per AZ that don't change unless the LB is
+  # destroyed/recreated. Static IP exposure is provided by the existing
+  # wazuh-ga Global Accelerator, which now also fronts this NLB on
+  # 1514/1515 (see ../wazuh-ga/main.tf).
+  allocate_eips = false
 
   # Default off. NLB cross-zone is billed; flip true only if needed.
   cross_zone_load_balancing = false
@@ -230,6 +237,11 @@ resource "aws_lb_target_group_attachment" "agent_event" {
   target_group_arn = aws_lb_target_group.agent_event.arn
   target_id        = each.value
   port             = var.agent_event_port
+
+  # Required when the IP target is not in the NLB's own VPC. Our manager
+  # lives in shared-prod and is reached over TGW; the NLB sits in Perimeter
+  # ingress. AWS demands availability_zone = "all" for that case.
+  availability_zone = "all"
 }
 
 resource "aws_lb_listener" "agent_event" {
@@ -273,6 +285,9 @@ resource "aws_lb_target_group_attachment" "agent_enroll" {
   target_group_arn = aws_lb_target_group.agent_enroll.arn
   target_id        = each.value
   port             = var.agent_enroll_port
+
+  # Same cross-VPC reason as agent_event above.
+  availability_zone = "all"
 }
 
 resource "aws_lb_listener" "agent_enroll" {
@@ -287,22 +302,17 @@ resource "aws_lb_listener" "agent_enroll" {
 }
 
 ###############################################################################
-# Outputs - the static IPs are the whole point. Share with vendors / agents.
+# Outputs - the NLB DNS name is what the wazuh-ga GA stack consumes.
 ###############################################################################
 
 output "nlb_dns_name" {
-  description = "DNS name of the NLB. Use as a CNAME target if you want a friendly hostname."
+  description = "DNS name of the NLB. The wazuh-ga stack consumes this so the GA can target the NLB on 1514/1515."
   value       = module.nlb.nlb_dns_name
 }
 
 output "nlb_arn" {
-  description = "NLB ARN."
+  description = "NLB ARN. Consumed by wazuh-ga as the endpoint for 1514/1515 listeners."
   value       = module.nlb.nlb_arn
-}
-
-output "static_ips" {
-  description = "Static EIPs attached to the NLB - one per AZ. Publish these for allowlisting."
-  value       = module.nlb.static_ips_list
 }
 
 output "ingress_alb_arn_attached" {
