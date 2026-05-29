@@ -1,0 +1,33 @@
+# Terraform
+**/.terraform/
+**/.terraform.lock.hcl.bak
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+crash.log
+crash.*.log
+
+# Local-only variable files. Commit example.tfvars only.
+*.tfvars
+*.tfvars.json
+!example.tfvars
+!*.example.tfvars
+
+# Override files
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# CLI configuration
+.terraformrc
+terraform.rc
+
+# macOS
+.DS_Store
+
+# Editors
+.idea/
+.vscode/
+*.swp
