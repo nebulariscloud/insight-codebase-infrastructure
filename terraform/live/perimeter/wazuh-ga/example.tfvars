@@ -1,0 +1,5 @@
+account_name = "Perimeter"
+account_id   = "713939170920"
+stack_name   = "wazuh-ga"
+alb_region   = "us-east-2"
+alb_name     = "ingress-alb"
