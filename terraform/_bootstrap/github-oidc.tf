@@ -133,6 +133,7 @@ data "aws_iam_policy_document" "spoke_assume" {
       "ssm:GetParameter",
       "ssm:GetParameters",
       "ssm:GetParametersByPath",
+      "ssm:ListTagsForResource",
     ]
     resources = ["*"]
   }

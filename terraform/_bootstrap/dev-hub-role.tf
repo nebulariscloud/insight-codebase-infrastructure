@@ -79,6 +79,7 @@ data "aws_iam_policy_document" "dev_hub_access" {
       "ssm:GetParameter",
       "ssm:GetParameters",
       "ssm:GetParametersByPath",
+      "ssm:ListTagsForResource",
     ]
     resources = ["*"]
   }
@@ -159,6 +160,7 @@ data "aws_iam_policy_document" "readonly_hub_access" {
       "ssm:GetParameter",
       "ssm:GetParameters",
       "ssm:GetParametersByPath",
+      "ssm:ListTagsForResource",
     ]
     resources = ["*"]
   }

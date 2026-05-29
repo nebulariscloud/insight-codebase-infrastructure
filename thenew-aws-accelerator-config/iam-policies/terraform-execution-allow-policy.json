@@ -79,7 +79,8 @@
         "ssm:DescribeParameters",
         "ssm:GetParameter",
         "ssm:GetParameters",
-        "ssm:GetParametersByPath"
+        "ssm:GetParametersByPath",
+        "ssm:ListTagsForResource"
       ],
       "Resource": "*"
     },
