@@ -4,6 +4,8 @@
 # Internet-facing Network Load Balancer that gives the Wazuh deployment two
 # capabilities the existing ALB cannot:
 #   - raw TCP listeners on 1514 / 1515 for Wazuh agent traffic
+#   - raw UDP listener on 514 for syslog ingestion (ALBs are HTTP-only,
+#     and standard syslog is UDP)
 #   - stable EIPs (one per AZ) so customers can allowlist a fixed IP set
 #
 # Listener layout:
@@ -12,6 +14,7 @@
 #            stable IPs in front of it.
 #   :1514 -> raw TCP to the Wazuh manager EC2 IPs (cross-VPC via TGW).
 #   :1515 -> raw TCP to the Wazuh manager EC2 IPs (cross-VPC via TGW).
+#   :514  -> raw UDP to the Wazuh manager EC2 IPs (syslog input, cross-VPC).
 #
 # This stack does NOT manage:
 #   - The IngressALB itself (LZA's ingress-alb.yaml owns it)
@@ -40,7 +43,7 @@ data "aws_lb" "ingress_alb" {
 
 resource "aws_security_group" "nlb" {
   name        = "${var.stack_name}-sg"
-  description = "Security group for the Wazuh NLB - inbound 443/1514/1515"
+  description = "Security group for the Wazuh NLB - inbound 443 TCP, 1514/1515 TCP, 514 UDP"
   vpc_id      = var.ingress_vpc_id
 
   tags = { Name = "${var.stack_name}-sg" }
@@ -83,6 +86,18 @@ resource "aws_vpc_security_group_ingress_rule" "agent_enroll" {
   description       = "Wazuh agent enrollment from ${each.value}"
 }
 
+# 514/UDP - syslog input (RFC 3164 / RFC 5424). MUST be UDP; a TCP rule here
+# would silently accept connections that the manager will never read.
+resource "aws_vpc_security_group_ingress_rule" "syslog" {
+  for_each          = toset(var.ingress_cidrs)
+  security_group_id = aws_security_group.nlb.id
+  cidr_ipv4         = each.value
+  from_port         = var.syslog_port
+  to_port           = var.syslog_port
+  ip_protocol       = "udp"
+  description       = "Wazuh syslog (UDP) from ${each.value}"
+}
+
 # Egress to backends (ALB SG and Wazuh manager via TGW). NLBs forward source
 # IPs by default, so the LB itself doesn't NAT - but the SG attached to the
 # NLB still gates outbound. Allow the three target ports broadly within RFC1918.
@@ -111,6 +126,15 @@ resource "aws_vpc_security_group_egress_rule" "to_wazuh_enroll" {
   to_port           = var.agent_enroll_port
   ip_protocol       = "tcp"
   description       = "To Wazuh manager (enrollment)"
+}
+
+resource "aws_vpc_security_group_egress_rule" "to_wazuh_syslog" {
+  security_group_id = aws_security_group.nlb.id
+  cidr_ipv4         = "10.0.0.0/8"
+  from_port         = var.syslog_port
+  to_port           = var.syslog_port
+  ip_protocol       = "udp"
+  description       = "To Wazuh manager (syslog UDP)"
 }
 
 ###############################################################################
@@ -315,6 +339,68 @@ resource "aws_lb_listener" "agent_enroll" {
   default_action {
     type             = "forward"
     target_group_arn = aws_lb_target_group.agent_enroll.arn
+  }
+}
+
+###############################################################################
+# Listener: 514/UDP -> Wazuh manager (raw UDP, IP target)
+#
+# Standard syslog (RFC 3164) is UDP, fire-and-forget. Wazuh's syslog input
+# does not respond, so the asymmetric-routing concerns that affect TCP
+# do not apply here - there is no reply path to break.
+#
+# NLB UDP target groups always preserve client IP (the option cannot be
+# disabled), which is what we want anyway: the manager will log the real
+# syslog sender IP for source attribution.
+#
+# Health checks: UDP target groups can't be probed with UDP (no response
+# semantics). Probe TCP on the agent events port (1514) instead - if the
+# manager process is up enough to listen on 1514, it's also up enough to
+# receive syslog on 514. Standard NLB UDP health-check pattern.
+###############################################################################
+
+resource "aws_lb_target_group" "syslog" {
+  name        = "${var.stack_name}-syslog"
+  target_type = "ip"
+  port        = var.syslog_port
+  protocol    = "UDP"
+  vpc_id      = var.ingress_vpc_id
+
+  health_check {
+    enabled             = true
+    protocol            = "TCP"
+    port                = tostring(var.agent_event_port)
+    interval            = 30
+    healthy_threshold   = 3
+    unhealthy_threshold = 3
+  }
+
+  tags = { Name = "${var.stack_name}-syslog" }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "aws_lb_target_group_attachment" "syslog" {
+  for_each         = toset(var.wazuh_manager_ips)
+  target_group_arn = aws_lb_target_group.syslog.arn
+  target_id        = each.value
+  port             = var.syslog_port
+
+  # Same cross-VPC reason as the TCP target groups: the manager lives in
+  # shared-prod, the NLB in Perimeter, joined by TGW.
+  availability_zone = "all"
+}
+
+resource "aws_lb_listener" "syslog" {
+  load_balancer_arn = module.nlb.nlb_arn
+  port              = var.syslog_port
+  protocol          = "UDP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.syslog.arn
   }
 }
 

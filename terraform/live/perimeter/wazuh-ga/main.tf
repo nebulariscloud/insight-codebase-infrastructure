@@ -11,6 +11,10 @@
 # As of the wazuh-nlb stack, this accelerator also fronts the new NLB on
 # 1514/1515 for Wazuh agent events and enrollment. Same two anycast IPs
 # now serve all four ports: 80/443 (-> ALB) and 1514/1515 (-> NLB).
+#
+# Plus a dedicated UDP 514 listener -> NLB for syslog ingestion. UDP needs
+# its own listener because GA listeners are single-protocol; you cannot mix
+# TCP and UDP on the same one.
 ###############################################################################
 
 # Discover the IngressALB in us-east-2. Lookup by name (set by LZA's
@@ -98,6 +102,49 @@ resource "aws_globalaccelerator_endpoint_group" "wazuh_agent" {
     # Preserve client IP all the way through: GA -> NLB -> EC2. The NLB
     # target groups already have preserve_client_ip = "true", so the Wazuh
     # manager sees the real agent source IP.
+    client_ip_preservation_enabled = true
+  }
+}
+
+###############################################################################
+# Wazuh syslog listener (UDP 514) on the same accelerator -> NLB
+#
+# Separate listener because GA listeners are single-protocol. The previous
+# attempt (a hand-edit) ended up associated with the existing TCP 443 path,
+# which silently dropped all syslog traffic - syslog is UDP, and even if it
+# were TCP the listener was on 443 not 514.
+#
+# Health-checking a UDP path is awkward (no response semantics), so we probe
+# TCP on the agent events port (1514) instead. If 1514 is up, the manager
+# is almost certainly listening on 514 too.
+###############################################################################
+
+resource "aws_globalaccelerator_listener" "wazuh_syslog" {
+  accelerator_arn = module.ga.accelerator_arn
+  protocol        = "UDP"
+  client_affinity = "NONE"
+
+  port_range {
+    from_port = var.syslog_port
+    to_port   = var.syslog_port
+  }
+}
+
+resource "aws_globalaccelerator_endpoint_group" "wazuh_syslog" {
+  listener_arn          = aws_globalaccelerator_listener.wazuh_syslog.id
+  endpoint_group_region = var.alb_region
+
+  # GA UDP endpoint groups still take a TCP health-check port. Probe 1514
+  # for the same reason as on the NLB target group: there's no UDP probe.
+  health_check_port             = var.agent_event_port
+  health_check_interval_seconds = 30
+  threshold_count               = 3
+
+  endpoint_configuration {
+    endpoint_id = data.aws_lb.wazuh_nlb.arn
+    weight      = 100
+    # NLB UDP target groups always preserve client IP - keep this on so the
+    # Wazuh manager logs the real syslog sender IP.
     client_ip_preservation_enabled = true
   }
 }
