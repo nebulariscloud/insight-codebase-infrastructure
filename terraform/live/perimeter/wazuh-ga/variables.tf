@@ -46,3 +46,13 @@ variable "agent_enroll_port" {
   type        = number
   default     = 1515
 }
+
+variable "syslog_port" {
+  description = <<-EOT
+    Wazuh syslog input port (UDP). Default 514. Drives a dedicated UDP
+    listener on the same accelerator (GA listeners are single-protocol,
+    so this can't share the TCP listener that handles 1514/1515).
+  EOT
+  type        = number
+  default     = 514
+}

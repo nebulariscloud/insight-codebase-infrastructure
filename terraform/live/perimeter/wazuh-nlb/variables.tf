@@ -79,6 +79,15 @@ variable "agent_enroll_port" {
   default     = 1515
 }
 
+variable "syslog_port" {
+  description = <<-EOT
+    Wazuh syslog input port (UDP). Default 514. Standard RFC 3164 syslog
+    is UDP; a TCP listener here will never receive any logs.
+  EOT
+  type        = number
+  default     = 514
+}
+
 variable "https_port" {
   description = "HTTPS port the NLB exposes for the dashboard/API. Forwards to the existing ALB."
   type        = number
@@ -87,9 +96,10 @@ variable "https_port" {
 
 variable "ingress_cidrs" {
   description = <<-EOT
-    Source CIDRs allowed inbound to the NLB on the agent ports (1514/1515).
-    Default 0.0.0.0/0 because Wazuh agents come from anywhere; tighten to
-    the customer's egress IPs once known. 443 stays open to the world.
+    Source CIDRs allowed inbound to the NLB on the agent ports (TCP 1514/1515)
+    and the syslog port (UDP 514). Default 0.0.0.0/0 because senders come
+    from anywhere; tighten to the customer's egress IPs once known.
+    443 stays open to the world.
   EOT
   type        = list(string)
   default     = ["0.0.0.0/0"]
