@@ -198,13 +198,20 @@ resource "aws_lb_listener" "https" {
 # in Perimeter, the Wazuh manager lives in shared-prod. The TGW route between
 # them must exist (it does, it's how the ALB already reaches the Wazuh API).
 #
-# preserve_client_ip toggle:
-#   - With IP targets, NLB preserves source IP by default. The Wazuh manager
-#     SG must therefore allow 1514/1515 from real client IPs (typically the
-#     world, since agents come from anywhere).
-#   - Set preserve_client_ip = false on the TG if you instead want to allow
-#     just the NLB subnets at the manager SG. Trades visibility for a simpler
-#     SG rule.
+# preserve_client_ip toggle (FIXED to false for this stack):
+#   - With it on, the manager has to reply directly to the public agent IP.
+#     But the manager's default 0.0.0.0/0 route exits via the egress /
+#     inspection VPC, not back through Perimeter where the NLB lives. A
+#     stateful device on that asymmetric path RSTs the SYN-ACK after ~1ms,
+#     so the TLS handshake never completes. Symptom: openssl s_client
+#     connects, then write returns ECONNRESET with 0 bytes read.
+#   - With it off, the NLB SNATs to its own VPC IPs, the manager replies
+#     to the NLB symmetrically (in-VPC), and the NLB returns to the real
+#     client. Trade-off: Wazuh logs the NLB private IPs as the agent
+#     source, not the real public IP.
+#   - The earlier hub-spoke topology was supposed to make preserve = true
+#     work, but in practice the egress/inspection path still drops returns,
+#     so we keep this off until that path is reworked end to end.
 ###############################################################################
 
 resource "aws_lb_target_group" "agent_event" {
@@ -214,7 +221,14 @@ resource "aws_lb_target_group" "agent_event" {
   protocol    = "TCP"
   vpc_id      = var.ingress_vpc_id
 
-  preserve_client_ip = "true"
+  # IMPORTANT: kept false on purpose. Setting this to true breaks return-path
+  # routing for our deployment - the manager's reply to a public agent has
+  # to leave shared-prod via its default 0.0.0.0/0 route, which goes through
+  # the egress/inspection VPC instead of back through the Perimeter ingress
+  # VPC where the NLB lives. A stateful device on that asymmetric path RSTs
+  # the SYN-ACK after ~1ms, killing every TLS handshake before any bytes
+  # flow. With this off the NLB SNATs and the path stays symmetric.
+  preserve_client_ip = "false"
 
   health_check {
     enabled             = true
@@ -262,7 +276,10 @@ resource "aws_lb_target_group" "agent_enroll" {
   protocol    = "TCP"
   vpc_id      = var.ingress_vpc_id
 
-  preserve_client_ip = "true"
+  # See the long comment on aws_lb_target_group.agent_event above. Same
+  # asymmetric-routing reason: keep false so the NLB SNATs and the manager's
+  # reply path stays inside the Perimeter <-> shared-prod TGW pair.
+  preserve_client_ip = "false"
 
   health_check {
     enabled             = true
@@ -322,7 +339,10 @@ output "ingress_alb_arn_attached" {
 
 ###############################################################################
 # Reminder: outside this stack you still need to make sure the Wazuh manager
-# security group allows 1514/1515 inbound (from 0.0.0.0/0 if preserving client
-# IP, or from the Perimeter ingress VPC CIDR if not). That SG is in shared-prod,
-# managed wherever you manage that EC2 - either LZA or another Terraform leaf.
+# security group allows 1514/1515 inbound. Because preserve_client_ip is
+# disabled on the IP target groups above, the manager only sees traffic
+# sourced from the NLB's private IPs in the Perimeter ingress VPC, so the
+# SG can be scoped to the ingress VPC CIDR (e.g. 10.0.0.0/20) rather than
+# 0.0.0.0/0. That SG is in shared-prod, managed wherever you manage that
+# EC2 - either LZA or another Terraform leaf.
 ###############################################################################

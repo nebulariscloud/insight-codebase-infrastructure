@@ -103,16 +103,28 @@ SG is blocking the traffic.
 ## Wazuh manager SG checklist
 
 The manager EC2 (in shared-prod) needs an SG rule allowing 1514/1515
-inbound. Because `preserve_client_ip = true` on the IP target groups, the
-source IPs the manager sees will be the real agent IPs, not the NLB.
+inbound. Because `preserve_client_ip = "false"` on the IP target groups
+(see the long comment in `main.tf`), the manager only sees traffic
+sourced from the NLB's private IPs in the Perimeter ingress VPC, **not**
+real public agent IPs.
 
-- TCP 1514 from `0.0.0.0/0`
-- TCP 1515 from `0.0.0.0/0`
+- TCP 1514 from the Perimeter ingress VPC CIDR (e.g. `10.0.0.0/20`)
+- TCP 1515 from the Perimeter ingress VPC CIDR
 
-If you'd rather keep the manager SG tight, set
-`preserve_client_ip = "false"` on the two IP target groups in `main.tf`
-and re-apply, then the manager only needs the Perimeter ingress VPC CIDR
-(but you lose real client IPs in Wazuh's logs).
+Why we run with preserve_client_ip off: with it on, the manager's reply
+to a public agent has to leave shared-prod via its default 0.0.0.0/0
+route, which goes through the egress/inspection VPC instead of back
+through the Perimeter ingress VPC where the NLB lives. A stateful device
+on that asymmetric path RSTs the SYN-ACK after ~1ms, killing every TLS
+handshake before any bytes flow. Symptom is `openssl s_client` connecting
+but `write` returning ECONNRESET with 0 bytes read. Disabling
+preserve_client_ip makes the NLB SNAT, so the reply path stays symmetric.
+
+Trade-off: Wazuh logs the NLB's private IPs as the agent source instead
+of real public IPs. If that becomes a compliance requirement, the
+alternative is reworking the shared-prod return-path routing so replies
+to public agent IPs go back through Perimeter — fragile because public
+IPs are unbounded.
 
 ## Cost
 
