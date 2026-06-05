@@ -42,8 +42,13 @@ data "aws_lb" "ingress_alb" {
 ###############################################################################
 
 resource "aws_security_group" "nlb" {
-  name        = "${var.stack_name}-sg"
-  description = "Security group for the Wazuh NLB - inbound 443 TCP, 1514/1515 TCP, 514 UDP"
+  name = "${var.stack_name}-sg"
+  # NOTE: The exact wording of this description matters because changing it
+  # forces SG replacement (AWS doesn't allow updating description in-place
+  # on an SG), and our SG has a fixed name (`wazuh-nlb-sg`) which conflicts
+  # with the create_before_destroy lifecycle. Keep the original wording -
+  # add new ports to comments inside the resource, not to the description.
+  description = "Security group for the Wazuh NLB - inbound 443/1514/1515"
   vpc_id      = var.ingress_vpc_id
 
   tags = { Name = "${var.stack_name}-sg" }
