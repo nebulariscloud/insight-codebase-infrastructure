@@ -1,0 +1,5 @@
+# Same rationale as wazuh-nlb: this leaf's terraform.tfvars contains only
+# public AWS resource IDs and the SFTP server's private IP. All safe to
+# commit. Override the parent terraform/.gitignore so CI can read it via
+# -var-file=terraform.tfvars.
+!terraform.tfvars
