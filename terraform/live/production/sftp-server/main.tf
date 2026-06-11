@@ -69,6 +69,27 @@ module "ec2_migrated" {
 }
 
 ###############################################################################
+# Optional EICE access (admin SSH via EC2 Instance Connect Endpoint)
+#
+# When var.eice_security_group_id is non-empty, the SFTP server's instance SG
+# is opened on TCP/22 from that source SG. This lets us SSH into the box from
+# CloudShell via EICE for troubleshooting (no SSM agent required, no public
+# IP, no bastion). The EICE endpoint itself is created out-of-band per the
+# scriptcase-migration-guide; this just wires its SG into the server SG.
+###############################################################################
+
+resource "aws_vpc_security_group_ingress_rule" "eice_ssh" {
+  count = var.eice_security_group_id == "" ? 0 : 1
+
+  security_group_id            = module.ec2_migrated.security_group_id
+  referenced_security_group_id = var.eice_security_group_id
+  from_port                    = var.sftp_port
+  to_port                      = var.sftp_port
+  ip_protocol                  = "tcp"
+  description                  = "Admin SSH from EC2 Instance Connect Endpoint"
+}
+
+###############################################################################
 # Outputs - the NLB leaf reads private_ip from this stack's output and
 # plugs it into its own tfvars. (One-time, manual hand-off; matches the
 # pattern used by wazuh-nlb / wazuh-ga.)

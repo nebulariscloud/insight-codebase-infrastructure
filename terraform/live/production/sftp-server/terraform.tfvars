@@ -36,3 +36,10 @@ root_volume_size_gib = 20
 
 sftp_port        = 22
 ingress_vpc_cidr = "10.0.0.0/20"
+
+# EC2 Instance Connect Endpoint SG in shared-prod. Opens admin SSH from
+# EICE only - no public exposure, no bastion. Get this from:
+#   aws ec2 describe-instance-connect-endpoints --region us-east-2 \
+#     --filters Name=vpc-id,Values=vpc-04a8720d0ddb40713 \
+#     --query 'InstanceConnectEndpoints[].SecurityGroupIds'
+eice_security_group_id = "sg-0a990a87e6abca926"
