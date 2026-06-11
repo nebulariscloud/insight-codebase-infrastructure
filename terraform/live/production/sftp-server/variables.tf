@@ -101,6 +101,17 @@ variable "sftp_port" {
   default     = 22
 }
 
+variable "eice_security_group_id" {
+  description = <<-EOT
+    Optional. Security group ID of the EC2 Instance Connect Endpoint in
+    shared-prod (e.g. sg-0a990a87e6abca926). When set, the SFTP server
+    SG is opened on TCP/22 from that SG so admins can SSH via EICE for
+    troubleshooting. Leave empty to skip.
+  EOT
+  type        = string
+  default     = ""
+}
+
 variable "data_volume_snapshot_id" {
   description = <<-EOT
     Snapshot ID for an extra data volume to attach at /dev/sdb. Use this

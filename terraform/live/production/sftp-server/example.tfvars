@@ -44,3 +44,10 @@ sftp_port = 22
 # CIDR of the perimeter ingress VPC where the NLB lives. Default is correct
 # for this LZA setup (HomeRegionIngressCidr in replacements-config.yaml).
 ingress_vpc_cidr = "10.0.0.0/20"
+
+# Optional. Set to the EC2 Instance Connect Endpoint SG ID in shared-prod
+# to allow admin SSH via EICE. Get with:
+#   aws ec2 describe-instance-connect-endpoints --region us-east-2 \
+#     --filters Name=vpc-id,Values=<shared-prod-vpc-id> \
+#     --query 'InstanceConnectEndpoints[].SecurityGroupIds'
+# eice_security_group_id = "sg-XXXXXXXXXXXXXXXXX"
