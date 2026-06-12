@@ -25,8 +25,62 @@ module "ec2_migrated" {
   vpc_id        = var.vpc_id
   private_ip    = var.private_ip
 
-  iam_instance_profile = var.iam_instance_profile
+  # Dedicated instance profile defined in iam.tf. Carries the same SSM and
+  # CloudWatch Agent permissions LZA's default role provides, plus scoped
+  # access to the amex-recordings bucket in the sibling leaf.
+  iam_instance_profile = aws_iam_instance_profile.sftp.name
   key_name             = var.key_name
+
+  # First-boot bootstrap. Runs only on a fresh instance launch (cloud-init
+  # marks user_data as processed after the first run). Used to:
+  #   1. Whitelist the perimeter ingress CIDR in fail2ban so the NLB's
+  #      private IPs (which all client traffic appears to come from since
+  #      preserve_client_ip=false) never get banned.
+  #   2. Install the EC2 Instance Connect agent so admins can SSH via EICE
+  #      from the AWS Console / mssh without needing pre-shared keys.
+  #   3. Restart sshd as a safety net.
+  # The script is idempotent and tolerates missing services / tools, so it
+  # works on Amazon Linux 2/2023, Ubuntu, RHEL/CentOS, etc.
+  user_data = <<-EOT
+    #!/bin/bash
+    set +e
+    exec > >(tee /var/log/sftp-bootstrap.log) 2>&1
+    echo "[bootstrap] start: $(date -u)"
+
+    # ---- fail2ban whitelist for the NLB CIDR ---------------------------------
+    if [ -d /etc/fail2ban ]; then
+      JAIL_LOCAL=/etc/fail2ban/jail.local
+      touch "$JAIL_LOCAL"
+      if ! grep -qE '^\s*ignoreip\s*=.*10\.0\.0\.0/20' "$JAIL_LOCAL"; then
+        echo "[bootstrap] adding 10.0.0.0/20 to fail2ban ignoreip"
+        # Remove any existing [DEFAULT] section we previously added; keep user content.
+        printf '\n[DEFAULT]\nignoreip = 127.0.0.1/8 ::1 10.0.0.0/20\n' >> "$JAIL_LOCAL"
+      fi
+      # Wipe accumulated bans from any previous boot persisted to sqlite.
+      rm -f /var/lib/fail2ban/fail2ban.sqlite3 2>/dev/null
+      systemctl restart fail2ban 2>/dev/null || service fail2ban restart 2>/dev/null
+      echo "[bootstrap] fail2ban: $(systemctl is-active fail2ban 2>/dev/null || echo unknown)"
+    else
+      echo "[bootstrap] fail2ban not installed - skipping"
+    fi
+
+    # ---- EC2 Instance Connect agent ------------------------------------------
+    if ! command -v eic_run_authorized_keys >/dev/null 2>&1; then
+      if command -v dnf >/dev/null 2>&1; then
+        dnf install -y ec2-instance-connect
+      elif command -v yum >/dev/null 2>&1; then
+        yum install -y ec2-instance-connect
+      elif command -v apt-get >/dev/null 2>&1; then
+        apt-get update && apt-get install -y ec2-instance-connect
+      fi
+    fi
+    echo "[bootstrap] eic agent: $(command -v eic_run_authorized_keys || echo missing)"
+
+    # ---- sshd safety reload --------------------------------------------------
+    systemctl restart sshd 2>/dev/null || systemctl restart ssh 2>/dev/null || service sshd restart 2>/dev/null
+
+    echo "[bootstrap] done: $(date -u)"
+  EOT
 
   # Inbound: SFTP only, scoped to the Perimeter ingress VPC CIDR. The NLB
   # has preserve_client_ip=false, so the manager only sees NLB private IPs
