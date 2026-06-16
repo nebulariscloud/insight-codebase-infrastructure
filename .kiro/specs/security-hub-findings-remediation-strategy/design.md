@@ -274,7 +274,7 @@ Every deferred row pointing at a missing permission or unsatisfied prerequisite 
 | 25 | `KMS.1` | Customer policies don't allow `kms:*` decrypt on `*` | `Deferred` → `Terraform` | resolve P-1 then policy edits via Terraform on the IAM management surface | Org-wide (findings 19, 33) | 2/3/2 | 14 | 2 |
 | 26 | `CloudFormation.4` | Stacks have service roles | `Deferred` | D-4: should LZA-managed stacks inherit a service role? | LZA-managed stacks | 2/3/2 | 14 | 2 |
 | 27 | `CloudFormation.3` | Stack termination protection | `Deferred` | D-3: enable on LZA-managed stacks without breaking the pipeline? | LZA-managed stacks | 2/3/2 | 14 | 2 |
-| 28 | `SSM.6` | SSM Automation CloudWatch logging | `Terraform` | `terraform/modules/security-baseline/ssm.tf` (`aws_ssm_service_setting` for `automation/cloudwatch-log-group`) plus cross-region IAM Automation Assume Role — **Wave 1 implementation complete** in `terraform/modules/security-baseline/ssm-automation-logging.tf`, includes per-region CMK + log group + IAM role + service setting | All 3 regions | 2/2/3 | 13 | 1 |
+| 28 | `SSM.6` | SSM Automation CloudWatch logging | `Manual` (per-runbook config) | AWS does not expose `ssm/automation/cloudwatch-log-group` as a service setting. Logging is configured per-runbook invocation by passing `CloudWatchOutputEnabled` and `CloudWatchLogGroupName`. The `security-baseline` Terraform module still creates the destination CMK + log group `/aws/ssm/automation` + IAM role `AcceleratorBaseline-SSMAutomationLogging` so any Automation execution can opt in. **Wave 1 infrastructure complete; SSM.6 closure depends on operators using the destination when launching runbooks.** | All 3 regions | 2/2/2 | 11 | 1 |
 
 #### Low
 
@@ -314,8 +314,8 @@ By mechanism (distinct entries):
 |---|---|
 | `LZA-Config` | 9 |
 | `Config-Rule-SSM` | 7 |
-| `Terraform` | 5 |
-| `Manual` | 4 |
+| `Terraform` | 4 |
+| `Manual` | 5 |
 | `Deferred` | 10 |
 
 ### Prioritization framework

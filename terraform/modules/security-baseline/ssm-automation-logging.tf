@@ -299,35 +299,29 @@ resource "aws_iam_role_policy" "automation_logging" {
 }
 
 ###############################################################################
-# 4. SSM service settings pointing Automation at the log groups
+# Note on SSM.6 (SSM Automation should have CloudWatch logging enabled)
 #
-# depends_on guarantees the log group exists before SSM accepts the setting.
-# Without the explicit dependency, AWS rejects the value at apply time.
+# AWS does not expose ssm/automation/cloudwatch-log-group as an account-level
+# SSM service setting. The Console "Automation > Preferences" UI you may see
+# does NOT persist a service setting; it only sets a default that applies at
+# runbook invocation time and is not stored as account state.
+#
+# Consequence: there is no aws_ssm_service_setting resource that can satisfy
+# Inspector control SSM.6. Logging must be specified per-runbook by passing
+# CloudWatchOutputEnabled / CloudWatchLogGroupName when starting an Automation
+# execution (or in the Run Command CloudWatch output config).
+#
+# What this module still provides for that workflow:
+#   - aws_kms_key per region (encrypts the log group)
+#   - aws_cloudwatch_log_group "/aws/ssm/automation" per region
+#   - aws_iam_role "AcceleratorBaseline-SSMAutomationLogging" with permission to
+#     write to those log groups
+#
+# When you start an Automation execution, point it at:
+#   - log group:    /aws/ssm/automation
+#   - service role: arn:aws:iam::<account>:role/AcceleratorBaseline-SSMAutomationLogging
+#
+# The strategy doc reclassifies SSM.6 from "Terraform" to "Manual" with this
+# runbook note. See:
+#   .kiro/specs/security-hub-findings-remediation-strategy/design.md
 ###############################################################################
-
-resource "aws_ssm_service_setting" "automation_log_group_use1" {
-  provider = aws.use1
-
-  setting_id    = "arn:${local.partition}:ssm:${var.regions.use1}:${local.account_id}:servicesetting/ssm/automation/cloudwatch-log-group"
-  setting_value = local.automation_log_group_name
-
-  depends_on = [aws_cloudwatch_log_group.automation_use1]
-}
-
-resource "aws_ssm_service_setting" "automation_log_group_use2" {
-  provider = aws.use2
-
-  setting_id    = "arn:${local.partition}:ssm:${var.regions.use2}:${local.account_id}:servicesetting/ssm/automation/cloudwatch-log-group"
-  setting_value = local.automation_log_group_name
-
-  depends_on = [aws_cloudwatch_log_group.automation_use2]
-}
-
-resource "aws_ssm_service_setting" "automation_log_group_usw2" {
-  provider = aws.usw2
-
-  setting_id    = "arn:${local.partition}:ssm:${var.regions.usw2}:${local.account_id}:servicesetting/ssm/automation/cloudwatch-log-group"
-  setting_value = local.automation_log_group_name
-
-  depends_on = [aws_cloudwatch_log_group.automation_usw2]
-}
