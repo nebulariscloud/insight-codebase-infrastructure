@@ -11,7 +11,7 @@
 
 # Set explicitly only if /accelerator/organization/account-ids/PCI is not yet
 # published in SharedServices SSM. Default behavior is to read it from SSM.
-# account_id = "123456789012"
+account_id = "247514667218"
 
 # security_contact_name  = "Alex Gonzalez"
 # security_contact_email = "security@nebulariscloud.com"
