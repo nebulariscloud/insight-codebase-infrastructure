@@ -55,7 +55,7 @@ data "aws_iam_policy_document" "automation_logs_kms_use1" {
     condition {
       test     = "ArnLike"
       variable = "kms:EncryptionContext:aws:logs:arn"
-      values   = [local.automation_log_group_arns.use1]
+      values   = [local.automation_log_group_kms_context_arns.use1]
     }
   }
 
@@ -108,7 +108,7 @@ data "aws_iam_policy_document" "automation_logs_kms_use2" {
     condition {
       test     = "ArnLike"
       variable = "kms:EncryptionContext:aws:logs:arn"
-      values   = [local.automation_log_group_arns.use2]
+      values   = [local.automation_log_group_kms_context_arns.use2]
     }
   }
 
@@ -161,7 +161,7 @@ data "aws_iam_policy_document" "automation_logs_kms_usw2" {
     condition {
       test     = "ArnLike"
       variable = "kms:EncryptionContext:aws:logs:arn"
-      values   = [local.automation_log_group_arns.usw2]
+      values   = [local.automation_log_group_kms_context_arns.usw2]
     }
   }
 

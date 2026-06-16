@@ -26,11 +26,21 @@ locals {
     && length(var.inspector_regions) > 0
   )
 
-  # Pre-compute the per-region log group ARNs so the IAM permissions policy can
-  # enumerate them explicitly (no wildcards on Resource).
+  # Pre-compute the per-region log group ARNs.
+  # For IAM permissions on the role (logs:CreateLogStream / PutLogEvents),
+  # we use the :* suffix to allow operations on all log streams in the group.
   automation_log_group_arns = {
     use1 = "arn:${local.partition}:logs:${var.regions.use1}:${local.account_id}:log-group:${local.automation_log_group_name}:*"
     use2 = "arn:${local.partition}:logs:${var.regions.use2}:${local.account_id}:log-group:${local.automation_log_group_name}:*"
     usw2 = "arn:${local.partition}:logs:${var.regions.usw2}:${local.account_id}:log-group:${local.automation_log_group_name}:*"
+  }
+
+  # For the KMS encryption-context condition, CloudWatch Logs sends the literal
+  # log group ARN (no :* suffix). Using the wildcard form here would fail to
+  # match the literal value and KMS would reject the encrypt operation.
+  automation_log_group_kms_context_arns = {
+    use1 = "arn:${local.partition}:logs:${var.regions.use1}:${local.account_id}:log-group:${local.automation_log_group_name}"
+    use2 = "arn:${local.partition}:logs:${var.regions.use2}:${local.account_id}:log-group:${local.automation_log_group_name}"
+    usw2 = "arn:${local.partition}:logs:${var.regions.usw2}:${local.account_id}:log-group:${local.automation_log_group_name}"
   }
 }
