@@ -1,0 +1,218 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AppLayerServices",
+      "Effect": "Allow",
+      "Action": [
+        "elasticloadbalancing:*",
+        "wafv2:*",
+        "acm:*",
+        "globalaccelerator:*",
+        "route53:*",
+        "route53resolver:*",
+        "autoscaling:*",
+        "application-autoscaling:*",
+        "rds:*",
+        "elasticache:*",
+        "ecs:*",
+        "ecr:*",
+        "lambda:*",
+        "apigateway:*",
+        "events:*",
+        "scheduler:*",
+        "sns:*",
+        "sqs:*",
+        "secretsmanager:*",
+        "states:*",
+        "logs:*",
+        "cloudwatch:*",
+        "tag:*",
+        "s3:*"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "Ec2AppLayer",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:Describe*",
+        "ec2:Get*",
+        "ec2:RunInstances",
+        "ec2:StartInstances",
+        "ec2:StopInstances",
+        "ec2:RebootInstances",
+        "ec2:TerminateInstances",
+        "ec2:ModifyInstanceAttribute",
+        "ec2:CreateTags",
+        "ec2:DeleteTags",
+        "ec2:*SecurityGroup*",
+        "ec2:CreateVolume",
+        "ec2:DeleteVolume",
+        "ec2:AttachVolume",
+        "ec2:DetachVolume",
+        "ec2:ModifyVolume",
+        "ec2:CreateSnapshot",
+        "ec2:DeleteSnapshot",
+        "ec2:CreateImage",
+        "ec2:DeregisterImage",
+        "ec2:CopyImage",
+        "ec2:CopySnapshot",
+        "ec2:*LaunchTemplate*",
+        "ec2:*KeyPair",
+        "ec2:AssociateAddress",
+        "ec2:DisassociateAddress",
+        "ec2:AllocateAddress",
+        "ec2:ReleaseAddress",
+        "ec2:CreateNetworkInterface",
+        "ec2:DeleteNetworkInterface",
+        "ec2:AttachNetworkInterface",
+        "ec2:DetachNetworkInterface",
+        "ec2:ModifyNetworkInterfaceAttribute",
+        "ec2:EnableSnapshotBlockPublicAccess",
+        "ec2:DisableSnapshotBlockPublicAccess",
+        "ec2:GetSnapshotBlockPublicAccessState"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "SsmRead",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:DescribeParameters",
+        "ssm:GetParameter",
+        "ssm:GetParameters",
+        "ssm:GetParametersByPath",
+        "ssm:GetServiceSetting",
+        "ssm:ListTagsForResource"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "SsmWriteOutsideAccelerator",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:PutParameter",
+        "ssm:DeleteParameter",
+        "ssm:DeleteParameters",
+        "ssm:AddTagsToResource",
+        "ssm:RemoveTagsFromResource",
+        "ssm:LabelParameterVersion"
+      ],
+      "NotResource": ["arn:${PARTITION}:ssm:*:*:parameter/accelerator/*"]
+    },
+    {
+      "Sid": "KmsRead",
+      "Effect": "Allow",
+      "Action": [
+        "kms:Describe*",
+        "kms:Get*",
+        "kms:List*",
+        "kms:Encrypt",
+        "kms:Decrypt",
+        "kms:GenerateDataKey*",
+        "kms:ReEncrypt*"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "KmsManageOutsideAccelerator",
+      "Effect": "Allow",
+      "Action": [
+        "kms:CreateKey",
+        "kms:CreateAlias",
+        "kms:DeleteAlias",
+        "kms:UpdateAlias",
+        "kms:ScheduleKeyDeletion",
+        "kms:CancelKeyDeletion",
+        "kms:EnableKey",
+        "kms:DisableKey",
+        "kms:EnableKeyRotation",
+        "kms:DisableKeyRotation",
+        "kms:GetKeyRotationStatus",
+        "kms:PutKeyPolicy",
+        "kms:TagResource",
+        "kms:UntagResource"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringNotLike": {
+          "aws:ResourceTag/Accelerator": "AWSAccelerator"
+        }
+      }
+    },
+    {
+      "Sid": "IamForAppRoles",
+      "Effect": "Allow",
+      "Action": [
+        "iam:Get*",
+        "iam:List*",
+        "iam:CreateRole",
+        "iam:DeleteRole",
+        "iam:UpdateRole",
+        "iam:UpdateRoleDescription",
+        "iam:UpdateAssumeRolePolicy",
+        "iam:AttachRolePolicy",
+        "iam:DetachRolePolicy",
+        "iam:PutRolePolicy",
+        "iam:DeleteRolePolicy",
+        "iam:CreatePolicy",
+        "iam:DeletePolicy",
+        "iam:CreatePolicyVersion",
+        "iam:DeletePolicyVersion",
+        "iam:SetDefaultPolicyVersion",
+        "iam:CreateInstanceProfile",
+        "iam:DeleteInstanceProfile",
+        "iam:AddRoleToInstanceProfile",
+        "iam:RemoveRoleFromInstanceProfile",
+        "iam:Tag*",
+        "iam:Untag*",
+        "iam:CreateServiceLinkedRole",
+        "iam:DeleteServiceLinkedRole"
+      ],
+      "NotResource": [
+        "arn:${PARTITION}:iam::*:role/aws-controltower-*",
+        "arn:${PARTITION}:iam::*:role/AWSAccelerator-*",
+        "arn:${PARTITION}:iam::*:role/AWSControlTowerExecution",
+        "arn:${PARTITION}:iam::*:role/AWSCloudFormationStackSetExecutionRole",
+        "arn:${PARTITION}:iam::*:role/cdk-accel-*",
+        "arn:${PARTITION}:iam::*:role/stacksets-exec-*",
+        "arn:${PARTITION}:iam::*:role/aws-service-role/*",
+        "arn:${PARTITION}:iam::*:policy/AWSAccelerator-*",
+        "arn:${PARTITION}:iam::*:instance-profile/AWSAccelerator-*"
+      ]
+    },
+    {
+      "Sid": "PassRoleForAppRoles",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "NotResource": [
+        "arn:${PARTITION}:iam::*:role/aws-controltower-*",
+        "arn:${PARTITION}:iam::*:role/AWSControlTowerExecution",
+        "arn:${PARTITION}:iam::*:role/AWSCloudFormationStackSetExecutionRole",
+        "arn:${PARTITION}:iam::*:role/cdk-accel-*"
+      ]
+    },
+    {
+      "Sid": "SsmServiceSettings",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:UpdateServiceSetting",
+        "ssm:ResetServiceSetting"
+      ],
+      "Resource": [
+        "arn:${PARTITION}:ssm:*:*:servicesetting/ssm/documents/console/public-sharing-permission"
+      ]
+    },
+    {
+      "Sid": "AccountAlternateContacts",
+      "Effect": "Allow",
+      "Action": [
+        "account:GetAlternateContact",
+        "account:PutAlternateContact",
+        "account:DeleteAlternateContact"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
