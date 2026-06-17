@@ -1,0 +1,46 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AccountRootAdministration",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:${PARTITION}:iam::${ACCOUNT_ID}:root"
+      },
+      "Action": "kms:*",
+      "Resource": "*"
+    },
+    {
+      "Sid": "AllowS3ServiceUseInThisAccount",
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "s3.amazonaws.com"
+      },
+      "Action": [
+        "kms:Encrypt",
+        "kms:Decrypt",
+        "kms:ReEncrypt*",
+        "kms:GenerateDataKey*",
+        "kms:DescribeKey"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "kms:CallerAccount": "${ACCOUNT_ID}"
+        }
+      }
+    },
+    {
+      "Sid": "AllowLogArchiveCrossAccountReadForAccessLogs",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:${PARTITION}:iam::${LOG_ARCHIVE_ACCOUNT_ID}:root"
+      },
+      "Action": [
+        "kms:Decrypt",
+        "kms:DescribeKey"
+      ],
+      "Resource": "*"
+    }
+  ]
+}

@@ -91,6 +91,35 @@ centralSecurityServices:
           # Attaches instance profiles to an EC2 instance
           - name: "{{ AcceleratorPrefix }}-Attach-IAM-Instance-Profile"
             template: ssm-documents/attach-iam-instance-profile.yaml
+          # S3.9 - Enable server access logging on a bucket pointing at the
+          # LZA per-region access-log bucket.
+          - name: "{{ AcceleratorPrefix }}-SSM-Enable-S3-Bucket-Logging"
+            template: ssm-documents/enable-s3-bucket-logging.yaml
+          # S3.10 + S3.13 - Apply the default Accelerator S3 lifecycle to a
+          # bucket. Transitions only, no expirations. Tag-based opt-out via
+          # accelerator:s3-lifecycle-managed=false.
+          - name: "{{ AcceleratorPrefix }}-SSM-Apply-Default-S3-Lifecycle"
+            template: ssm-documents/apply-default-s3-lifecycle.yaml
+          # S3.17 - Enable SSE-KMS default encryption on a bucket using the
+          # per-region Accelerator S3 default CMK (alias/accelerator/s3-default).
+          - name: "{{ AcceleratorPrefix }}-SSM-Enable-S3-Bucket-KMS-Encryption"
+            template: ssm-documents/enable-s3-bucket-kms-encryption.yaml
+
+# AWS KMS Customer Managed Key Configurations
+# Provides per-region CMKs that are not part of LZA's internal encryption set.
+# Currently used by the S3.17 auto-remediation to enforce SSE-KMS on every bucket.
+keyManagementService:
+  keySets:
+    - name: AcceleratorS3DefaultKey
+      alias: alias/accelerator/s3-default
+      description: Default customer-managed KMS key for org-wide S3 bucket encryption (used by S3.17 auto-remediation).
+      enableKeyRotation: true
+      enabled: true
+      removalPolicy: retain
+      policy: kms-policies/accelerator-s3-default-key-policy.json
+      deploymentTargets:
+        organizationalUnits:
+          - Root
 
 # AWS IAM Access Analyzer Configurations
 accessAnalyzer:
@@ -315,6 +344,142 @@ awsConfig:
               - name: LogDestination
                 value: ${ACCEL_LOOKUP::Bucket:elbLogs}
                 type: StringList
+        ###############################################################
+        # Rules added by spec lza-config-rules-and-ssm-remediations
+        # Closes Security Hub findings: S3.5, S3.9, S3.10, S3.13, S3.17,
+        # SNS.1, CloudWatch.16. Deployed org-wide via Root.
+        ###############################################################
+        # S3.5 - Buckets must reject non-SSL requests.
+        - name: "{{ AcceleratorPrefix }}-s3-bucket-ssl-requests-only"
+          identifier: S3_BUCKET_SSL_REQUESTS_ONLY
+          complianceResourceTypes:
+            - AWS::S3::Bucket
+          tags:
+            - key: Accelerator
+              value: "{{ AcceleratorPrefix }}"
+          remediation:
+            rolePolicyFile: ssm-remediation-roles/s3-ssl-requests-only-remediation-role.json
+            automatic: true
+            targetId: AWSConfigRemediation-RestrictBucketSSLRequestsOnly
+            targetVersion: "1"
+            retryAttemptSeconds: 60
+            maximumAutomaticAttempts: 5
+            parameters:
+              - name: BucketName
+                value: RESOURCE_ID
+                type: String
+        # S3.9 - Buckets must have server access logging enabled, pointing
+        # at the LZA per-region access-log bucket.
+        - name: "{{ AcceleratorPrefix }}-s3-bucket-logging-enabled"
+          identifier: S3_BUCKET_LOGGING_ENABLED
+          complianceResourceTypes:
+            - AWS::S3::Bucket
+          tags:
+            - key: Accelerator
+              value: "{{ AcceleratorPrefix }}"
+          remediation:
+            rolePolicyFile: ssm-remediation-roles/s3-bucket-logging-remediation-role.json
+            automatic: true
+            targetId: "{{ AcceleratorPrefix }}-SSM-Enable-S3-Bucket-Logging"
+            retryAttemptSeconds: 60
+            maximumAutomaticAttempts: 5
+            parameters:
+              - name: BucketName
+                value: RESOURCE_ID
+                type: String
+              - name: TargetBucket
+                value: ${ACCEL_LOOKUP::Bucket:s3AccessLogs}
+                type: String
+        # S3.10 + S3.13 - Buckets must have a lifecycle configuration.
+        # The default lifecycle has TRANSITIONS ONLY (no expirations) and is
+        # opt-out via tag accelerator:s3-lifecycle-managed=false.
+        - name: "{{ AcceleratorPrefix }}-s3-lifecycle-policy-check"
+          identifier: S3_LIFECYCLE_POLICY_CHECK
+          complianceResourceTypes:
+            - AWS::S3::Bucket
+          tags:
+            - key: Accelerator
+              value: "{{ AcceleratorPrefix }}"
+          remediation:
+            rolePolicyFile: ssm-remediation-roles/s3-lifecycle-remediation-role.json
+            automatic: true
+            targetId: "{{ AcceleratorPrefix }}-SSM-Apply-Default-S3-Lifecycle"
+            retryAttemptSeconds: 60
+            maximumAutomaticAttempts: 5
+            parameters:
+              - name: BucketName
+                value: RESOURCE_ID
+                type: String
+        # S3.17 - Buckets must use SSE-KMS default encryption with the
+        # per-region Accelerator S3 default CMK.
+        - name: "{{ AcceleratorPrefix }}-s3-default-encryption-kms"
+          identifier: S3_DEFAULT_ENCRYPTION_KMS
+          complianceResourceTypes:
+            - AWS::S3::Bucket
+          tags:
+            - key: Accelerator
+              value: "{{ AcceleratorPrefix }}"
+          remediation:
+            rolePolicyFile: ssm-remediation-roles/s3-bucket-kms-encryption-remediation-role.json
+            automatic: true
+            targetId: "{{ AcceleratorPrefix }}-SSM-Enable-S3-Bucket-KMS-Encryption"
+            retryAttemptSeconds: 60
+            maximumAutomaticAttempts: 5
+            parameters:
+              - name: BucketName
+                value: RESOURCE_ID
+                type: String
+              - name: KmsKeyArnSsmPath
+                value: /accelerator/kms/AcceleratorS3DefaultKey/key-arn
+                type: String
+        # SNS.1 - SNS topics must be encrypted at rest with KMS. Uses
+        # alias/aws/sns (AWS-managed key) intentionally, see spec design Decision 9.
+        - name: "{{ AcceleratorPrefix }}-sns-encrypted-kms"
+          identifier: SNS_ENCRYPTED_KMS
+          complianceResourceTypes:
+            - AWS::SNS::Topic
+          tags:
+            - key: Accelerator
+              value: "{{ AcceleratorPrefix }}"
+          remediation:
+            rolePolicyFile: ssm-remediation-roles/sns-kms-encryption-remediation-role.json
+            automatic: true
+            targetId: AWSConfigRemediation-EnableEncryptionWithSSEKMSOnSNSTopic
+            targetVersion: "1"
+            retryAttemptSeconds: 60
+            maximumAutomaticAttempts: 5
+            parameters:
+              - name: TopicArn
+                value: RESOURCE_ID
+                type: String
+              - name: KmsKeyArn
+                value: alias/aws/sns
+                type: String
+        # CloudWatch.16 - Log groups must have a retention period of >= 365 days.
+        # Matches the global-config.yaml cloudwatchLogRetentionInDays default.
+        - name: "{{ AcceleratorPrefix }}-cw-loggroup-retention-period-check"
+          identifier: CW_LOGGROUP_RETENTION_PERIOD_CHECK
+          complianceResourceTypes:
+            - AWS::Logs::LogGroup
+          inputParameters:
+            MinRetentionTime: "365"
+          tags:
+            - key: Accelerator
+              value: "{{ AcceleratorPrefix }}"
+          remediation:
+            rolePolicyFile: ssm-remediation-roles/cloudwatch-log-retention-remediation-role.json
+            automatic: true
+            targetId: AWS-UpdateCloudWatchLogGroupRetention
+            targetVersion: "1"
+            retryAttemptSeconds: 60
+            maximumAutomaticAttempts: 5
+            parameters:
+              - name: LogGroupName
+                value: RESOURCE_ID
+                type: String
+              - name: RetentionInDays
+                value: "365"
+                type: String
     # Management account deployment, Control Tower cannot deploy these rules in the Management account so we need to do it manually.
     - deploymentTargets:
         accounts:
