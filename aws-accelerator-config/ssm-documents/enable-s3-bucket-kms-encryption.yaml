@@ -1,0 +1,37 @@
+description: Enable SSE-KMS default encryption on an S3 bucket using the per-region Accelerator S3 default CMK. Used by Config rule {{ AcceleratorPrefix }}-s3-default-encryption-kms.
+schemaVersion: "0.3"
+assumeRole: "{{ AutomationAssumeRole }}"
+parameters:
+  BucketName:
+    type: String
+    description: Name of the bucket on which to enable SSE-KMS default encryption.
+  KmsKeyArnSsmPath:
+    type: String
+    default: "/accelerator/kms/AcceleratorS3DefaultKey/key-arn"
+    description: SSM Parameter Store path holding the per-region Accelerator S3 default CMK ARN.
+  AutomationAssumeRole:
+    type: String
+    description: ARN of the IAM role SSM Automation assumes to perform the remediation.
+mainSteps:
+  - name: getKmsKeyArn
+    action: "aws:executeAwsApi"
+    inputs:
+      Service: ssm
+      Api: GetParameter
+      Name: "{{ KmsKeyArnSsmPath }}"
+    outputs:
+      - Name: KeyArn
+        Selector: "$.Parameter.Value"
+        Type: String
+  - name: enableEncryption
+    action: "aws:executeAwsApi"
+    inputs:
+      Service: s3
+      Api: PutBucketEncryption
+      Bucket: "{{ BucketName }}"
+      ServerSideEncryptionConfiguration:
+        Rules:
+          - ApplyServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: "{{ getKmsKeyArn.KeyArn }}"
+            BucketKeyEnabled: true

@@ -1,0 +1,100 @@
+description: |
+  Apply the default Accelerator S3 lifecycle to a bucket. Transitions only - no expirations.
+  Compliance-driven: data is never deleted by lifecycle.
+
+  Tag-based opt-out: a bucket tagged accelerator:s3-lifecycle-managed=false is skipped.
+
+  Used by Config rule {{ AcceleratorPrefix }}-s3-lifecycle-policy-check.
+schemaVersion: "0.3"
+assumeRole: "{{ AutomationAssumeRole }}"
+parameters:
+  BucketName:
+    type: String
+    description: Name of the bucket on which to apply the default lifecycle configuration.
+  AutomationAssumeRole:
+    type: String
+    description: ARN of the IAM role SSM Automation assumes to perform the remediation.
+mainSteps:
+  - name: checkOptOutTag
+    action: "aws:executeScript"
+    description: Read bucket tags; emit OptOut=true when accelerator:s3-lifecycle-managed=false.
+    inputs:
+      Runtime: python3.11
+      Handler: handler
+      InputPayload:
+        BucketName: "{{ BucketName }}"
+      Script: |
+        import boto3
+
+        def handler(events, context):
+            bucket = events['BucketName']
+            s3 = boto3.client('s3')
+            try:
+                resp = s3.get_bucket_tagging(Bucket=bucket)
+                tag_set = resp.get('TagSet', [])
+            except s3.exceptions.ClientError as exc:
+                # NoSuchTagSet means the bucket has no tags. That's not an opt-out.
+                if exc.response['Error']['Code'] == 'NoSuchTagSet':
+                    return {"OptOut": "false"}
+                raise
+
+            for tag in tag_set:
+                if tag.get('Key') == 'accelerator:s3-lifecycle-managed' and tag.get('Value') == 'false':
+                    return {"OptOut": "true"}
+            return {"OptOut": "false"}
+    outputs:
+      - Name: OptOut
+        Selector: "$.Payload.OptOut"
+        Type: String
+  - name: branchOnOptOut
+    action: "aws:branch"
+    inputs:
+      Choices:
+        - NextStep: skipBucket
+          Variable: "{{ checkOptOutTag.OptOut }}"
+          StringEquals: "true"
+      Default: applyLifecycle
+  - name: skipBucket
+    action: "aws:executeScript"
+    description: Bucket is opted out by tag; document the skip and end successfully.
+    inputs:
+      Runtime: python3.11
+      Handler: handler
+      InputPayload:
+        BucketName: "{{ BucketName }}"
+      Script: |
+        def handler(events, context):
+            return {
+                "status": "skipped",
+                "reason": "accelerator:s3-lifecycle-managed=false",
+                "bucket": events['BucketName'],
+            }
+    isEnd: true
+  - name: applyLifecycle
+    action: "aws:executeAwsApi"
+    inputs:
+      Service: s3
+      Api: PutBucketLifecycleConfiguration
+      Bucket: "{{ BucketName }}"
+      LifecycleConfiguration:
+        Rules:
+          - ID: AcceleratorDefaultLifecycle
+            Status: Enabled
+            Filter:
+              Prefix: ""
+            Transitions:
+              - Days: 90
+                StorageClass: STANDARD_IA
+              - Days: 180
+                StorageClass: GLACIER
+              - Days: 365
+                StorageClass: DEEP_ARCHIVE
+            NoncurrentVersionTransitions:
+              - NoncurrentDays: 30
+                StorageClass: STANDARD_IA
+              - NoncurrentDays: 90
+                StorageClass: GLACIER
+              - NoncurrentDays: 180
+                StorageClass: DEEP_ARCHIVE
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7

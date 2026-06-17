@@ -1,0 +1,24 @@
+description: Enable server access logging on an S3 bucket pointing at the LZA per-region access-log bucket. Used by Config rule {{ AcceleratorPrefix }}-s3-bucket-logging-enabled.
+schemaVersion: "0.3"
+assumeRole: "{{ AutomationAssumeRole }}"
+parameters:
+  BucketName:
+    type: String
+    description: Name of the bucket on which to enable server access logging.
+  TargetBucket:
+    type: String
+    description: Name of the bucket that receives access logs (LZA-managed access-log bucket for the region).
+  AutomationAssumeRole:
+    type: String
+    description: ARN of the IAM role SSM Automation assumes to perform the remediation.
+mainSteps:
+  - name: enableLogging
+    action: "aws:executeAwsApi"
+    inputs:
+      Service: s3
+      Api: PutBucketLogging
+      Bucket: "{{ BucketName }}"
+      BucketLoggingStatus:
+        LoggingEnabled:
+          TargetBucket: "{{ TargetBucket }}"
+          TargetPrefix: "s3-access-logs/{{ BucketName }}/"
