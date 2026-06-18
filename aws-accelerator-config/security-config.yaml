@@ -104,6 +104,16 @@ centralSecurityServices:
           # per-region Accelerator S3 default CMK (alias/accelerator/s3-default).
           - name: "{{ AcceleratorPrefix }}-SSM-Enable-S3-Bucket-KMS-Encryption"
             template: ssm-documents/enable-s3-bucket-kms-encryption.yaml
+          # SNS.1 - Enable SSE-KMS on an SNS topic. Custom doc because the
+          # AWS-managed AWSConfigRemediation-EnableEncryptionWithSSEKMSOnSNSTopic
+          # name is not available in this account/region set.
+          - name: "{{ AcceleratorPrefix }}-SSM-Enable-SNS-KMS-Encryption"
+            template: ssm-documents/enable-sns-kms-encryption.yaml
+          # CloudWatch.16 - Set CloudWatch Logs retention on a log group.
+          # Custom doc because there is no AWS-published runbook with the
+          # name AWS-UpdateCloudWatchLogGroupRetention.
+          - name: "{{ AcceleratorPrefix }}-SSM-Set-CloudWatch-Log-Group-Retention"
+            template: ssm-documents/set-cloudwatch-log-group-retention.yaml
 
 # AWS KMS Customer Managed Key Configurations
 # Provides per-region CMKs that are not part of LZA's internal encryption set.
@@ -361,7 +371,6 @@ awsConfig:
             rolePolicyFile: ssm-remediation-roles/s3-ssl-requests-only-remediation-role.json
             automatic: true
             targetId: AWSConfigRemediation-RestrictBucketSSLRequestsOnly
-            targetVersion: "1"
             retryAttemptSeconds: 60
             maximumAutomaticAttempts: 5
             parameters:
@@ -386,9 +395,6 @@ awsConfig:
             parameters:
               - name: BucketName
                 value: RESOURCE_ID
-                type: String
-              - name: TargetBucket
-                value: ${ACCEL_LOOKUP::Bucket:s3AccessLogs}
                 type: String
         # S3.10 + S3.13 - Buckets must have a lifecycle configuration.
         # The default lifecycle has TRANSITIONS ONLY (no expirations) and is
@@ -444,8 +450,7 @@ awsConfig:
           remediation:
             rolePolicyFile: ssm-remediation-roles/sns-kms-encryption-remediation-role.json
             automatic: true
-            targetId: AWSConfigRemediation-EnableEncryptionWithSSEKMSOnSNSTopic
-            targetVersion: "1"
+            targetId: "{{ AcceleratorPrefix }}-SSM-Enable-SNS-KMS-Encryption"
             retryAttemptSeconds: 60
             maximumAutomaticAttempts: 5
             parameters:
@@ -469,8 +474,7 @@ awsConfig:
           remediation:
             rolePolicyFile: ssm-remediation-roles/cloudwatch-log-retention-remediation-role.json
             automatic: true
-            targetId: AWS-UpdateCloudWatchLogGroupRetention
-            targetVersion: "1"
+            targetId: "{{ AcceleratorPrefix }}-SSM-Set-CloudWatch-Log-Group-Retention"
             retryAttemptSeconds: 60
             maximumAutomaticAttempts: 5
             parameters:

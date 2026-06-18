@@ -34,7 +34,7 @@
       "Sid": "AllowLogArchiveCrossAccountReadForAccessLogs",
       "Effect": "Allow",
       "Principal": {
-        "AWS": "arn:${PARTITION}:iam::${LOG_ARCHIVE_ACCOUNT_ID}:root"
+        "AWS": "arn:${PARTITION}:iam::808431466229:root"
       },
       "Action": [
         "kms:Decrypt",

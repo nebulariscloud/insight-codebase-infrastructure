@@ -1,0 +1,81 @@
+description: |
+  Set retention on a CloudWatch Logs log group.
+
+  Skipped resources:
+    - aws-controltower-* log groups (owned by Control Tower; SCP denies modification)
+    - /aws/lambda/aws-controltower-* log groups (Control Tower Lambda log groups)
+    - Any log group that returns AccessDeniedException (org-level SCP deny we
+      cannot enumerate fully). The remediation logs the skip and continues
+      rather than failing the whole rule.
+
+  Implementation note: the boto3 logs.put_retention_policy() API requires
+  retentionInDays as an int, but SSM document parameters are always typed
+  String when received. We cast the value before calling the API.
+
+  Used by Config rule {{ AcceleratorPrefix }}-cw-loggroup-retention-period-check.
+schemaVersion: "0.3"
+assumeRole: "{{ AutomationAssumeRole }}"
+parameters:
+  LogGroupName:
+    type: String
+    description: Name of the CloudWatch Logs log group on which to set retention.
+  RetentionInDays:
+    type: String
+    default: "365"
+    description: Retention in days. Must be one of the values supported by CloudWatch Logs.
+  AutomationAssumeRole:
+    type: String
+    description: ARN of the IAM role SSM Automation assumes to perform the remediation.
+mainSteps:
+  - name: setRetention
+    action: "aws:executeScript"
+    inputs:
+      Runtime: python3.11
+      Handler: handler
+      InputPayload:
+        LogGroupName: "{{ LogGroupName }}"
+        RetentionInDays: "{{ RetentionInDays }}"
+      Script: |
+        import boto3
+        from botocore.exceptions import ClientError
+
+        # Log group name prefixes owned by other systems we cannot modify.
+        # Kept in sync with prefixes denied by Control Tower / org SCPs.
+        SKIP_PREFIXES = (
+            "aws-controltower-",
+            "/aws/lambda/aws-controltower-",
+        )
+
+        def handler(events, context):
+            log_group = events['LogGroupName']
+
+            for prefix in SKIP_PREFIXES:
+                if log_group.startswith(prefix):
+                    return {
+                        "status": "skipped",
+                        "reason": f"prefix:{prefix}",
+                        "logGroupName": log_group,
+                    }
+
+            client = boto3.client('logs')
+            try:
+                client.put_retention_policy(
+                    logGroupName=log_group,
+                    retentionInDays=int(events['RetentionInDays']),
+                )
+            except ClientError as e:
+                code = e.response.get('Error', {}).get('Code', '')
+                if code in ('AccessDeniedException', 'AccessDenied'):
+                    return {
+                        "status": "skipped",
+                        "reason": "access-denied-by-scp",
+                        "logGroupName": log_group,
+                        "errorMessage": str(e),
+                    }
+                raise
+
+            return {
+                "status": "ok",
+                "logGroupName": log_group,
+                "retentionInDays": int(events['RetentionInDays']),
+            }
