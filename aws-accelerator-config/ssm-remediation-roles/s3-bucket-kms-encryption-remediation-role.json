@@ -8,7 +8,7 @@
         "s3:GetEncryptionConfiguration",
         "s3:PutEncryptionConfiguration"
       ],
-      "Resource": "arn:${PARTITION}:s3:::*"
+      "Resource": "*"
     },
     {
       "Sid": "ReadCmkArn",
@@ -16,7 +16,7 @@
       "Action": [
         "ssm:GetParameter"
       ],
-      "Resource": "arn:${PARTITION}:ssm:*:*:parameter/accelerator/kms/AcceleratorS3DefaultKey/key-arn"
+      "Resource": "arn:aws:ssm:*:*:parameter/accelerator/kms/AcceleratorS3DefaultKey/key-arn"
     }
   ]
 }

@@ -1,0 +1,80 @@
+description: |
+  Enable SSE-KMS encryption on an SNS topic by setting KmsMasterKeyId.
+
+  Skipped resources:
+    - aws-controltower-* topics (owned by Control Tower; SCP denies modification)
+
+  Used by Config rule {{ AcceleratorPrefix }}-sns-encrypted-kms.
+schemaVersion: "0.3"
+assumeRole: "{{ AutomationAssumeRole }}"
+parameters:
+  TopicArn:
+    type: String
+    description: ARN of the SNS topic on which to enable KMS encryption.
+  KmsKeyArn:
+    type: String
+    default: alias/aws/sns
+    description: KMS key ID, alias, or ARN to use for encryption. Defaults to the AWS-managed SNS key.
+  AutomationAssumeRole:
+    type: String
+    description: ARN of the IAM role SSM Automation assumes to perform the remediation.
+mainSteps:
+  - name: checkOwnership
+    action: "aws:executeScript"
+    description: Skip topics owned by Control Tower or other systems we cannot modify.
+    inputs:
+      Runtime: python3.11
+      Handler: handler
+      InputPayload:
+        TopicArn: "{{ TopicArn }}"
+      Script: |
+        SKIP_PREFIXES = (
+            "aws-controltower-",  # Control Tower topics; SCP denies modification.
+        )
+
+        def handler(events, context):
+            arn = events['TopicArn']
+            topic_name = arn.split(':')[-1]
+            for prefix in SKIP_PREFIXES:
+                if topic_name.startswith(prefix):
+                    return {"Skip": "true", "Reason": f"prefix:{prefix}"}
+            return {"Skip": "false", "Reason": ""}
+    outputs:
+      - Name: Skip
+        Selector: "$.Payload.Skip"
+        Type: String
+      - Name: Reason
+        Selector: "$.Payload.Reason"
+        Type: String
+  - name: branchOnOwnership
+    action: "aws:branch"
+    inputs:
+      Choices:
+        - NextStep: skipTopic
+          Variable: "{{ checkOwnership.Skip }}"
+          StringEquals: "true"
+      Default: enableEncryption
+  - name: skipTopic
+    action: "aws:executeScript"
+    inputs:
+      Runtime: python3.11
+      Handler: handler
+      InputPayload:
+        TopicArn: "{{ TopicArn }}"
+        Reason: "{{ checkOwnership.Reason }}"
+      Script: |
+        def handler(events, context):
+            return {
+                "status": "skipped",
+                "topic": events['TopicArn'],
+                "reason": events['Reason'],
+            }
+    isEnd: true
+  - name: enableEncryption
+    action: "aws:executeAwsApi"
+    inputs:
+      Service: sns
+      Api: SetTopicAttributes
+      TopicArn: "{{ TopicArn }}"
+      AttributeName: KmsMasterKeyId
+      AttributeValue: "{{ KmsKeyArn }}"

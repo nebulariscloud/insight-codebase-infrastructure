@@ -7,7 +7,7 @@
         "logs:DescribeLogGroups",
         "logs:PutRetentionPolicy"
       ],
-      "Resource": "arn:${PARTITION}:logs:*:*:log-group:*"
+      "Resource": "*"
     }
   ]
 }

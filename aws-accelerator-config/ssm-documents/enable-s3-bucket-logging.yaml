@@ -1,17 +1,53 @@
-description: Enable server access logging on an S3 bucket pointing at the LZA per-region access-log bucket. Used by Config rule {{ AcceleratorPrefix }}-s3-bucket-logging-enabled.
+description: |
+  Enable S3 server access logging on a bucket pointing at the per-account
+  per-region LZA-managed access-log bucket.
+
+  S3 requires the target log bucket to be in the same account as the source
+  bucket. We resolve the target name as
+  `aws-accelerator-s3-access-logs-<account-id>-<region>` which LZA provisions
+  in every enrolled account.
+
+  Used by Config rule {{ AcceleratorPrefix }}-s3-bucket-logging-enabled.
 schemaVersion: "0.3"
 assumeRole: "{{ AutomationAssumeRole }}"
 parameters:
   BucketName:
     type: String
     description: Name of the bucket on which to enable server access logging.
-  TargetBucket:
-    type: String
-    description: Name of the bucket that receives access logs (LZA-managed access-log bucket for the region).
   AutomationAssumeRole:
     type: String
     description: ARN of the IAM role SSM Automation assumes to perform the remediation.
 mainSteps:
+  - name: getContext
+    action: "aws:executeAwsApi"
+    description: Resolve the current account ID; region is taken from context.
+    inputs:
+      Service: sts
+      Api: GetCallerIdentity
+    outputs:
+      - Name: AccountId
+        Selector: "$.Account"
+        Type: String
+  - name: deriveTargetBucket
+    action: "aws:executeScript"
+    description: Compute the per-account per-region access-log bucket name.
+    inputs:
+      Runtime: python3.11
+      Handler: handler
+      InputPayload:
+        AccountId: "{{ getContext.AccountId }}"
+        Region: "{{ global:REGION }}"
+      Script: |
+        def handler(events, context):
+            account = events['AccountId']
+            region = events['Region']
+            return {
+                "TargetBucket": f"aws-accelerator-s3-access-logs-{account}-{region}"
+            }
+    outputs:
+      - Name: TargetBucket
+        Selector: "$.Payload.TargetBucket"
+        Type: String
   - name: enableLogging
     action: "aws:executeAwsApi"
     inputs:
@@ -20,5 +56,5 @@ mainSteps:
       Bucket: "{{ BucketName }}"
       BucketLoggingStatus:
         LoggingEnabled:
-          TargetBucket: "{{ TargetBucket }}"
+          TargetBucket: "{{ deriveTargetBucket.TargetBucket }}"
           TargetPrefix: "s3-access-logs/{{ BucketName }}/"

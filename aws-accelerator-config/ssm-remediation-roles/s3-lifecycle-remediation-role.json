@@ -8,7 +8,7 @@
         "s3:GetLifecycleConfiguration",
         "s3:PutLifecycleConfiguration"
       ],
-      "Resource": "arn:${PARTITION}:s3:::*"
+      "Resource": "*"
     }
   ]
 }
