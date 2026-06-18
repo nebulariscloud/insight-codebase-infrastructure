@@ -9,6 +9,12 @@ The internet-facing piece (NLB) lives in the sibling leaf
 Run this stack first, copy the `private_ip` output into that stack's
 tfvars, then apply it.
 
+The S3 bucket this server writes recordings to lives in the sibling leaf
+[`terraform/live/production/claro-recordings/`](../claro-recordings/).
+Apply that one **before** this stack so the scoped instance policy
+resolves to a bucket that already exists. Same pattern as
+`amex-recordings` -> `sftp-server`.
+
 ## AMI / snapshot provenance
 
 | | Source (us-east-1, acct 254422596287) | Target (us-east-2, acct 395516496764) |
@@ -27,11 +33,16 @@ swap the IDs.
 - Instance security group allowing SFTP only from the perimeter ingress
   VPC CIDR (default `10.0.0.0/20`).
 - Optional admin-SSH ingress rule from the EICE endpoint SG.
+- Dedicated IAM role + instance profile (`sftp-server-claro-instance-role`)
+  with SSM Session Manager, CloudWatch Agent, and a tightly-scoped
+  read/write policy on the `claro-recordings` bucket. Defined in
+  `iam.tf`.
 
 ## What this does NOT own
 
 - The shared-prod VPC and subnets (LZA owns them).
 - The NLB or any internet-facing piece (sibling leaf).
+- The `claro-recordings` S3 bucket itself (sibling leaf).
 - Route53 DNS (separate concern).
 - The AMI / snapshot copy (already done out-of-band, see provenance above).
 

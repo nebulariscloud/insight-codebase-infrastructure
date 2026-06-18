@@ -141,13 +141,15 @@ variable "root_volume_size_gib" {
   default     = 30
 }
 
-variable "iam_instance_profile" {
+variable "claro_bucket_name" {
   description = <<-EOT
-    IAM instance profile name. LZA provisions 'EC2-Default-SSM-Role' in
-    every spoke; that's enough for SSM access.
+    Name of the claro-recordings S3 bucket the instance needs access to.
+    Defaults to "claro-recordings-prod-<account_id>", matching the default
+    in terraform/live/production/claro-recordings/. Override only if the
+    bucket leaf was applied with a custom bucket_name.
   EOT
   type        = string
-  default     = "EC2-Default-SSM-Role"
+  default     = ""
 }
 
 variable "key_name" {
