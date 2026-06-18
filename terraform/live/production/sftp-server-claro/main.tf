@@ -29,7 +29,10 @@ module "ec2_migrated" {
   vpc_id        = var.vpc_id
   private_ip    = var.private_ip
 
-  iam_instance_profile = var.iam_instance_profile
+  # Dedicated instance profile defined in iam.tf. Carries the same SSM and
+  # CloudWatch Agent permissions LZA's default role provides, plus scoped
+  # access to the claro-recordings bucket in the sibling leaf.
+  iam_instance_profile = aws_iam_instance_profile.sftp.name
   key_name             = var.key_name
 
   # First-boot bootstrap. Runs only on a fresh instance launch (cloud-init
