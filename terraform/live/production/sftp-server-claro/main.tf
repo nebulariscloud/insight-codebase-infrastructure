@@ -115,7 +115,7 @@ module "ec2_migrated" {
   ]
 
   imdsv2_required         = true
-  monitoring              = true
+  monitoring              = false
   ebs_optimized           = true
   disable_api_termination = true
 
