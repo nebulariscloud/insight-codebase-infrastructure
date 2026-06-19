@@ -43,3 +43,10 @@ ingress_vpc_cidr = "10.0.0.0/20"
 #     --filters Name=vpc-id,Values=vpc-04a8720d0ddb40713 \
 #     --query 'InstanceConnectEndpoints[].SecurityGroupIds'
 eice_security_group_id = "sg-0a990a87e6abca926"
+
+# KMS key encrypting amex-recordings-prod-395516496764. The bucket uses
+# SSE-KMS, so the SFTP instance role needs kms:GenerateDataKey/Decrypt on
+# this key or every PutObject server-side gets denied and s3fs returns
+# EPERM. Confirm with:
+#   aws s3api get-bucket-encryption --bucket amex-recordings-prod-395516496764 --region us-east-2
+amex_bucket_kms_key_arn = "arn:aws:kms:us-east-2:395516496764:key/adacb68f-a099-486c-bfce-56bb696ed126"

@@ -33,6 +33,10 @@ data "aws_kms_alias" "session_manager_logs" {
 locals {
   amex_bucket_name = var.amex_bucket_name != "" ? var.amex_bucket_name : "amex-recordings-prod-${var.account_id}"
   amex_bucket_arn  = "arn:aws:s3:::${local.amex_bucket_name}"
+  # KMS key encrypting the amex-recordings bucket. Set in tfvars when the
+  # bucket uses SSE-KMS with a customer-managed key. When empty, the role
+  # gets no KMS grant (fine for SSE-S3 buckets).
+  amex_bucket_kms_key_arn = var.amex_bucket_kms_key_arn
 }
 
 data "aws_iam_policy_document" "sftp_assume" {
@@ -79,10 +83,15 @@ data "aws_iam_policy_document" "amex_bucket" {
     actions = [
       "s3:GetObject",
       "s3:GetObjectVersion",
+      "s3:GetObjectAttributes",
+      "s3:GetObjectTagging",
       "s3:PutObject",
       "s3:PutObjectAcl",
+      "s3:PutObjectTagging",
       "s3:PutObjectRetention",
       "s3:PutObjectLegalHold",
+      "s3:DeleteObject",
+      "s3:DeleteObjectVersion",
       "s3:AbortMultipartUpload",
       "s3:ListMultipartUploadParts",
     ]
@@ -94,6 +103,33 @@ resource "aws_iam_role_policy" "amex_bucket" {
   name   = "amex-recordings-access"
   role   = aws_iam_role.sftp.name
   policy = data.aws_iam_policy_document.amex_bucket.json
+}
+
+# When the bucket uses SSE-KMS with a customer-managed key, every
+# PutObject server-side calls kms:GenerateDataKey and every GetObject
+# calls kms:Decrypt against that key. Without these grants the EC2 sees
+# 403/EPERM at close time. This statement is gated on the variable so
+# SSE-S3 buckets don't get an unnecessary KMS grant.
+data "aws_iam_policy_document" "amex_bucket_kms" {
+  count = local.amex_bucket_kms_key_arn == "" ? 0 : 1
+
+  statement {
+    sid = "S3KmsDataKey"
+    actions = [
+      "kms:GenerateDataKey",
+      "kms:Decrypt",
+      "kms:DescribeKey",
+    ]
+    resources = [local.amex_bucket_kms_key_arn]
+  }
+}
+
+resource "aws_iam_role_policy" "amex_bucket_kms" {
+  count = local.amex_bucket_kms_key_arn == "" ? 0 : 1
+
+  name   = "amex-recordings-kms"
+  role   = aws_iam_role.sftp.name
+  policy = data.aws_iam_policy_document.amex_bucket_kms[0].json
 }
 
 # Session Manager KMS permissions (see comment on data.aws_kms_alias above).
