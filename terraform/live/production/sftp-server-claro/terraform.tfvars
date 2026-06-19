@@ -43,3 +43,12 @@ ingress_vpc_cidr = "10.0.0.0/20"
 # SFTP server stack. Opens admin SSH from EICE only - no public exposure,
 # no bastion.
 eice_security_group_id = "sg-0a990a87e6abca926"
+
+# KMS key encrypting claro-recordings-prod-395516496764. The bucket uses
+# SSE-KMS (S3.17 Security Hub auto-remediation), so the SFTP instance role
+# needs kms:GenerateDataKey/Decrypt on this key or every PutObject
+# server-side gets denied and s3fs returns EPERM. Confirm with:
+#   aws s3api get-bucket-encryption --bucket claro-recordings-prod-395516496764 --region us-east-2
+# Same key as the amex-recordings bucket - "Default customer-managed KMS
+# key for org-wide S3 bucket encryption".
+claro_bucket_kms_key_arn = "arn:aws:kms:us-east-2:395516496764:key/adacb68f-a099-486c-bfce-56bb696ed126"
