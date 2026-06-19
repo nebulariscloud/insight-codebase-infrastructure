@@ -17,6 +17,17 @@
 # lockstep when policy changes are needed.
 ###############################################################################
 
+# LZA's `sessionManager.sendToCloudWatchLogs = true` (global-config.yaml)
+# turns on KMS-encrypted Session Manager streaming. Our dedicated instance
+# role isn't on LZA's `sessionManager.attachPolicyToIamRoles` list (which
+# only covers EC2-Default-SSM-Role), so we grant kms:Decrypt +
+# kms:GenerateDataKey directly here. Without it, `aws ssm start-session`
+# fails with "AccessDeniedException: ... is not authorized to perform:
+# kms:Decrypt".
+data "aws_kms_alias" "session_manager_logs" {
+  name = "alias/accelerator/sessionmanager-logs/session"
+}
+
 locals {
   claro_bucket_name = var.claro_bucket_name != "" ? var.claro_bucket_name : "claro-recordings-prod-${var.account_id}"
   claro_bucket_arn  = "arn:aws:s3:::${local.claro_bucket_name}"
@@ -81,6 +92,21 @@ resource "aws_iam_role_policy" "claro_bucket" {
   name   = "claro-recordings-access"
   role   = aws_iam_role.sftp.name
   policy = data.aws_iam_policy_document.claro_bucket.json
+}
+
+# Session Manager KMS permissions (see comment on data.aws_kms_alias above).
+data "aws_iam_policy_document" "session_manager_kms" {
+  statement {
+    sid       = "SessionManagerLogsKms"
+    actions   = ["kms:Decrypt", "kms:GenerateDataKey"]
+    resources = [data.aws_kms_alias.session_manager_logs.target_key_arn]
+  }
+}
+
+resource "aws_iam_role_policy" "session_manager_kms" {
+  name   = "session-manager-kms"
+  role   = aws_iam_role.sftp.name
+  policy = data.aws_iam_policy_document.session_manager_kms.json
 }
 
 resource "aws_iam_instance_profile" "sftp" {

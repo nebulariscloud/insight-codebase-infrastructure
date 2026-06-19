@@ -76,6 +76,40 @@ module "ec2_migrated" {
     fi
     echo "[bootstrap] eic agent: $(command -v eic_run_authorized_keys || echo missing)"
 
+    # ---- SSM agent -----------------------------------------------------------
+    # Amazon Linux 2/2023 and Ubuntu (16.04+) ship with amazon-ssm-agent
+    # pre-installed. Debian does NOT, which is why the migrated AMI for these
+    # SFTP servers (Debian 13/trixie) showed up as "offline" in SSM until the
+    # agent was installed by hand. Bake it into first boot so future
+    # replacements come up Session-Manager-ready.
+    if ! systemctl list-unit-files 2>/dev/null | grep -q '^amazon-ssm-agent\.service'; then
+      echo "[bootstrap] installing amazon-ssm-agent"
+      REGION=$(curl -fs --max-time 5 -H "X-aws-ec2-metadata-token: $(curl -fs --max-time 5 -X PUT 'http://169.254.169.254/latest/api/token' -H 'X-aws-ec2-metadata-token-ttl-seconds: 60')" http://169.254.169.254/latest/meta-data/placement/region 2>/dev/null || echo "us-east-2")
+      ARCH=$(uname -m)
+      case "$ARCH" in
+        x86_64) DEB_ARCH=amd64 ;;
+        aarch64) DEB_ARCH=arm64 ;;
+        *) DEB_ARCH=amd64 ;;
+      esac
+      if command -v dpkg >/dev/null 2>&1; then
+        # Debian / Ubuntu install path (signed deb hosted by AWS, regional bucket).
+        TMP=$(mktemp -d)
+        if curl -fsSL --max-time 60 \
+             "https://s3.$${REGION}.amazonaws.com/amazon-ssm-$${REGION}/latest/debian_$${DEB_ARCH}/amazon-ssm-agent.deb" \
+             -o "$${TMP}/amazon-ssm-agent.deb"; then
+          dpkg -i "$${TMP}/amazon-ssm-agent.deb" || apt-get install -fy
+        fi
+        rm -rf "$${TMP}"
+      elif command -v rpm >/dev/null 2>&1; then
+        # RHEL / CentOS / Rocky / Alma install path.
+        rpm -ivh --replacepkgs \
+          "https://s3.$${REGION}.amazonaws.com/amazon-ssm-$${REGION}/latest/linux_$${DEB_ARCH}/amazon-ssm-agent.rpm" || true
+      fi
+    fi
+    systemctl enable --now amazon-ssm-agent 2>/dev/null || \
+      systemctl enable --now snap.amazon-ssm-agent.amazon-ssm-agent.service 2>/dev/null || true
+    echo "[bootstrap] ssm agent: $(systemctl is-active amazon-ssm-agent 2>/dev/null || echo unknown)"
+
     # ---- sshd safety reload --------------------------------------------------
     systemctl restart sshd 2>/dev/null || systemctl restart ssh 2>/dev/null || service sshd restart 2>/dev/null
 

@@ -14,6 +14,22 @@
 # the TerraformExecution allow-list (NotResource: AWSAccelerator-*).
 ###############################################################################
 
+# LZA's `sessionManager.sendToCloudWatchLogs = true` (global-config.yaml)
+# turns on KMS-encrypted Session Manager streaming. The CMK is created by
+# LZA per account/region with the alias below. Without kms:Decrypt +
+# kms:GenerateDataKey on this CMK, `aws ssm start-session` fails with
+# "AccessDeniedException: User ... is not authorized to perform:
+# kms:Decrypt on resource: arn:aws:kms:...:key/...".
+#
+# LZA wires this permission onto its own EC2-Default-SSM-Role via
+# `sessionManager.attachPolicyToIamRoles`. Our dedicated instance role
+# isn't on that list (and shouldn't be — keeping it Terraform-managed
+# avoids the LZA-owned-role mutation problem), so we grant the same
+# permission directly here.
+data "aws_kms_alias" "session_manager_logs" {
+  name = "alias/accelerator/sessionmanager-logs/session"
+}
+
 locals {
   amex_bucket_name = var.amex_bucket_name != "" ? var.amex_bucket_name : "amex-recordings-prod-${var.account_id}"
   amex_bucket_arn  = "arn:aws:s3:::${local.amex_bucket_name}"
@@ -78,6 +94,21 @@ resource "aws_iam_role_policy" "amex_bucket" {
   name   = "amex-recordings-access"
   role   = aws_iam_role.sftp.name
   policy = data.aws_iam_policy_document.amex_bucket.json
+}
+
+# Session Manager KMS permissions (see comment on data.aws_kms_alias above).
+data "aws_iam_policy_document" "session_manager_kms" {
+  statement {
+    sid       = "SessionManagerLogsKms"
+    actions   = ["kms:Decrypt", "kms:GenerateDataKey"]
+    resources = [data.aws_kms_alias.session_manager_logs.target_key_arn]
+  }
+}
+
+resource "aws_iam_role_policy" "session_manager_kms" {
+  name   = "session-manager-kms"
+  role   = aws_iam_role.sftp.name
+  policy = data.aws_iam_policy_document.session_manager_kms.json
 }
 
 resource "aws_iam_instance_profile" "sftp" {

@@ -60,18 +60,25 @@ terraform apply tfplan
 
 ## Verifying the instance
 
-After apply, get into the box via EICE (SSM agent is unavailable in
-shared-prod due to missing endpoints; EICE is the standard alternative
-in this LZA):
+After apply, get into the box via SSM Session Manager. The instance
+role carries `AmazonSSMManagedInstanceCore`, and the `user_data` in
+`main.tf` installs and enables `amazon-ssm-agent` on first boot
+(needed because the migrated AMI is Debian 13 / trixie which does not
+ship the agent by default — see the Claro SFTP migration summary
+under `docs/07-Operations/`). Within ~2 minutes of boot the agent
+registers and Session Manager is available.
 
 ```bash
 INSTANCE_ID=$(terraform output -raw instance_id)
 
-aws ec2-instance-connect ssh \
+# Confirm the agent has registered (PingStatus=Online).
+aws ssm describe-instance-information \
   --region us-east-2 \
-  --instance-id $INSTANCE_ID \
-  --connection-type eice \
-  --os-user ec2-user
+  --filters "Key=InstanceIds,Values=$INSTANCE_ID" \
+  --query 'InstanceInformationList[].[InstanceId,PingStatus,AgentVersion,PlatformName]' \
+  --output table
+
+aws ssm start-session --target $INSTANCE_ID --region us-east-2
 
 # Inside:
 sudo systemctl status sshd        # SFTP listener
@@ -79,6 +86,25 @@ sudo lsof -nP -i :22              # confirm sshd on 22
 df -hT                            # confirm root mounted
 sudo tail -50 /var/log/sftp-bootstrap.log   # first-boot script result
 ```
+
+## Fallback access via EICE
+
+If the SSM agent is offline (transient network issues, bad route, agent
+crash), the instance SG also accepts inbound TCP/22 from the
+shared-prod EC2 Instance Connect Endpoint SG (`sg-0a990a87e6abca926`),
+wired up via `eice_security_group_id` in `terraform.tfvars`. To use it:
+
+```bash
+aws ec2-instance-connect ssh \
+  --region us-east-2 \
+  --instance-id $INSTANCE_ID \
+  --connection-type eice \
+  --os-user ec2-user
+```
+
+Useful when troubleshooting the SSM agent itself (you can `journalctl
+-u amazon-ssm-agent -n 200` and check connectivity to
+`ssm.us-east-2.amazonaws.com` from inside the box).
 
 ## Hand-off to the NLB leaf
 

@@ -64,18 +64,31 @@ terraform apply tfplan
 
 ## Verifying the instance
 
-After apply, verify SSM access (no SSH key needed, the
-`EC2-Default-SSM-Role` profile gives the instance the right permissions):
+After apply, get into the box via SSM Session Manager. The instance
+role carries `AmazonSSMManagedInstanceCore`, and the `user_data` in
+`main.tf` installs and enables `amazon-ssm-agent` on first boot
+(needed because the migrated AMI is Debian 13 / trixie which does not
+ship the agent by default — see the Claro SFTP migration summary
+under `docs/07-Operations/`). Within ~2 minutes of boot the agent
+registers and Session Manager is available.
 
 ```bash
 INSTANCE_ID=$(terraform output -raw instance_id)
+
+# Confirm the agent has registered (PingStatus=Online).
+aws ssm describe-instance-information \
+  --region us-east-2 \
+  --filters "Key=InstanceIds,Values=$INSTANCE_ID" \
+  --query 'InstanceInformationList[].[InstanceId,PingStatus,AgentVersion,PlatformName]' \
+  --output table
 
 aws ssm start-session --target $INSTANCE_ID --region us-east-2
 
 # Inside the session:
 sudo systemctl status sshd        # SSH/SFTP listener should be running
 sudo lsof -nP -i :22              # confirm sshd listening on 22
-df -h                             # confirm the data volume mounted
+df -h                             # confirm root mounted
+sudo tail -50 /var/log/sftp-bootstrap.log   # first-boot script result
 ```
 
 If `df -h` doesn't show the data volume, format and mount it once:
@@ -92,6 +105,25 @@ echo "/dev/nvme1n1 /sftp xfs defaults,nofail 0 2" | sudo tee -a /etc/fstab
 
 If the snapshot was already a formatted filesystem, skip the mkfs and
 just mount it.
+
+## Fallback access via EICE
+
+If the SSM agent is offline (transient network issues, bad route, agent
+crash), the instance SG also accepts inbound TCP/22 from the
+shared-prod EC2 Instance Connect Endpoint SG (`sg-0a990a87e6abca926`),
+wired up via `eice_security_group_id` in `terraform.tfvars`. To use it:
+
+```bash
+aws ec2-instance-connect ssh \
+  --region us-east-2 \
+  --instance-id $INSTANCE_ID \
+  --connection-type eice \
+  --os-user ec2-user
+```
+
+Useful when troubleshooting the SSM agent itself (you can `journalctl
+-u amazon-ssm-agent -n 200` and check connectivity to
+`ssm.us-east-2.amazonaws.com` from inside the box).
 
 ## Hand-off to the NLB leaf
 
