@@ -1,0 +1,107 @@
+###############################################################################
+# One-off Terraform state surgery workflow.
+#
+# Runs `terraform untaint` (or another safe state command) against a single
+# leaf, then runs `terraform plan` so you can confirm the resulting state
+# is clean before merging any apply through the regular pipeline.
+#
+# Manual trigger only. Gated on the `production` environment for reviewer
+# approval, same as the apply job in terraform.yml.
+#
+# Add this when you need it; remove it when you're done. Keep it short-lived.
+###############################################################################
+
+name: terraform-state-surgery
+
+on:
+  workflow_dispatch:
+    inputs:
+      leaf:
+        description: "Leaf path (e.g. terraform/live/production/sftp-server)"
+        required: true
+        type: string
+      resource:
+        description: "Terraform resource address to act on (e.g. module.ec2_migrated.aws_instance.this)"
+        required: true
+        type: string
+      action:
+        description: "What to do: 'show' (read-only), 'untaint', or 'rm-then-import'"
+        required: true
+        type: choice
+        options:
+          - show
+          - untaint
+          - rm-then-import
+        default: show
+      import_id:
+        description: "AWS resource ID to import (only used when action=rm-then-import; e.g. i-0bb071580bdba4cb7)"
+        required: false
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  TF_VERSION: "1.9.5"
+  AWS_REGION: "us-east-2"
+  AWS_ROLE_ARN: ${{ secrets.AWS_TF_ROLE_ARN }}
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "0"
+
+jobs:
+  surgery:
+    runs-on: ubuntu-latest
+    environment: production    # same gate as apply in terraform.yml
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: gh-tf-surgery-${{ github.run_id }}
+
+      - name: terraform init
+        working-directory: ${{ inputs.leaf }}
+        run: terraform init -input=false
+
+      - name: state show (current)
+        working-directory: ${{ inputs.leaf }}
+        run: |
+          echo "=== state show BEFORE any change ==="
+          terraform state show '${{ inputs.resource }}' || echo "(resource not in state)"
+
+      - name: terraform untaint
+        if: ${{ inputs.action == 'untaint' }}
+        working-directory: ${{ inputs.leaf }}
+        run: terraform untaint '${{ inputs.resource }}'
+
+      - name: terraform state rm + import
+        if: ${{ inputs.action == 'rm-then-import' }}
+        working-directory: ${{ inputs.leaf }}
+        run: |
+          if [[ -z "${{ inputs.import_id }}" ]]; then
+            echo "::error::import_id is required when action=rm-then-import"; exit 1
+          fi
+          terraform state rm '${{ inputs.resource }}'
+          terraform import '${{ inputs.resource }}' '${{ inputs.import_id }}'
+
+      - name: state show (after)
+        if: ${{ inputs.action != 'show' }}
+        working-directory: ${{ inputs.leaf }}
+        run: |
+          echo "=== state show AFTER ${{ inputs.action }} ==="
+          terraform state show '${{ inputs.resource }}' || echo "(resource not in state)"
+
+      - name: terraform plan (no apply)
+        working-directory: ${{ inputs.leaf }}
+        run: |
+          set -o pipefail
+          echo "=== plan (FYI only, no apply) ==="
+          terraform plan -input=false -no-color -var-file=terraform.tfvars 2>&1 | tee plan.txt
