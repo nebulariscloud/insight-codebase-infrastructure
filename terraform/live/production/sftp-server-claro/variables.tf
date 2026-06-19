@@ -152,6 +152,27 @@ variable "claro_bucket_name" {
   default     = ""
 }
 
+variable "claro_bucket_kms_key_arn" {
+  description = <<-EOT
+    ARN of the customer-managed KMS key encrypting the claro-recordings
+    bucket. Required when the bucket uses SSE-KMS (the default in this
+    environment, applied by the S3.17 Security Hub auto-remediation).
+    Without it, server-side KMS calls during PutObject / GetObject get
+    denied and s3fs returns EPERM at close time.
+
+    Get the value with:
+
+      aws s3api get-bucket-encryption \
+        --bucket claro-recordings-prod-<account_id> --region us-east-2 \
+        --query 'ServerSideEncryptionConfiguration.Rules[0].ApplyServerSideEncryptionByDefault.KMSMasterKeyID' \
+        --output text
+
+    Leave empty if the bucket is SSE-S3 only.
+  EOT
+  type        = string
+  default     = ""
+}
+
 variable "key_name" {
   description = "EC2 key pair name. Empty = SSM-only access (recommended for SFTP servers in shared-prod)."
   type        = string
