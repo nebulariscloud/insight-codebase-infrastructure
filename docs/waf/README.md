@@ -5,6 +5,7 @@ Operational docs for the AWS WAF deployment. Written for the SOW deliverables (`
 | File | Audience | Purpose |
 |---|---|---|
 | `waf-architecture.md` | Engineering, audit | What's deployed, how it's wired, where ownership lives. |
+| `waf-design-decisions.md` | Engineering, audit, future maintainers | Why each design choice was made and what alternatives were considered. The "what we did and why" record. |
 | `waf-runbook.md` | On-call security | Step-by-step response when an alarm fires. |
 | `waf-tuning-guide.md` | Engineering | How to add / promote / roll back rules without breaking things. |
 | `waf-traffic-baseline.md` | Engineering | Captured traffic baseline + threshold derivations. Updated weekly during the first month, then monthly. |
