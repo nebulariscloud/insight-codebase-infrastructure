@@ -152,14 +152,18 @@ terraform/
 │   └── variables.tf
 ├── modules/                        # reusable building blocks
 │   ├── alb/
-│   ├── waf-managed/
+│   ├── waf-managed/                # WAFv2 Web ACL: managed groups + rate-limit + IPSets + geo + Bot Control + custom rules
+│   ├── waf-logs/                   # S3 + KMS log destination, optionally attaches to existing Web ACLs
+│   ├── waf-monitoring/             # CloudWatch alarms + dashboard + SNS-by-severity
 │   ├── ec2-migrated/
 │   └── global-accelerator/
 └── live/                           # one folder per stack, one state file each
     ├── perimeter/
     │   ├── ingress-alb/
     │   ├── scriptcase-lb/
-    │   └── scriptcase-ga/          # provider region us-west-2
+    │   ├── scriptcase-ga/          # provider region us-west-2
+    │   ├── waf-logs/               # WAF log bucket, attaches to ingress + scriptcase Web ACLs
+    │   └── waf-monitoring/         # alarms + dashboard for the perimeter Web ACLs
     ├── shared-prod/
     │   └── alfresco/
     └── pci/
