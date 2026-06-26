@@ -133,8 +133,14 @@ module "ec2_migrated" {
   # root volume and migrate with the AMI.
   additional_ebs_volumes = []
 
-  imdsv2_required         = true
-  monitoring              = true
+  imdsv2_required = true
+  # Detailed (1-minute) CloudWatch monitoring requires ec2:MonitorInstances,
+  # which the LZA TerraformExecution role's allow-policy doesn't grant. The
+  # default 5-minute basic monitoring is sufficient for an internal LMS; if
+  # we later need 1-minute metrics, add MonitorInstances/UnmonitorInstances
+  # to aws-accelerator-config/iam-policies/terraform-execution-allow-policy.json
+  # and flip this back to true.
+  monitoring              = false
   ebs_optimized           = true
   disable_api_termination = true
 
