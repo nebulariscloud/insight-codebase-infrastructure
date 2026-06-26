@@ -49,8 +49,13 @@ module "ec2_migrated" {
   # central SSM/SSMMessages/EC2Messages interface endpoints in the Network
   # endpoints VPC are auto-associated with this spoke via Route53 PHZs, so
   # the agent reaches the SSM service over TGW with no NAT-bound hop.
-  iam_instance_profile = "AWSAccelerator-EC2-Default-SSM-Role"
-  key_name             = var.key_name
+  #
+  # The module defaults iam_instance_profile to "EC2-Default-SSM-Role"
+  # (the actual IAM name; no AcceleratorPrefix in front of it - LZA's
+  # iam-config.yaml declares it as a bare name and that's how it lands
+  # in IAM). We rely on the module default rather than restating it
+  # here, so a future LZA prefix change is a one-place edit.
+  key_name = var.key_name
 
   # First-boot bootstrap. The Bitnami Debian 12 Moodle AMI does NOT ship
   # with amazon-ssm-agent (Debian, not Ubuntu/AL). Without this script the
