@@ -43,13 +43,19 @@ module "ec2_migrated" {
   vpc_id        = var.vpc_id
   private_ip    = var.private_ip
 
-  # LZA provisions the EC2-Default-SSM-Role instance profile in every spoke
-  # via iam-config.yaml. It carries AmazonSSMManagedInstanceCore plus the
-  # Default-SSM-S3-Policy for SSM agent updates and patch baselines. The
-  # central SSM/SSMMessages/EC2Messages interface endpoints in the Network
-  # endpoints VPC are auto-associated with this spoke via Route53 PHZs, so
-  # the agent reaches the SSM service over TGW with no NAT-bound hop.
-  iam_instance_profile = "AWSAccelerator-EC2-Default-SSM-Role"
+  # Dedicated instance profile defined in iam.tf. Mirrors the SSM and
+  # CloudWatch Agent managed policies LZA puts on its shared
+  # EC2-Default-SSM-Role, and adds the kms:Decrypt + kms:GenerateDataKey
+  # grant Session Manager needs against the LZA-managed
+  # accelerator/sessionmanager-logs/session CMK.
+  #
+  # Why dedicated, not the module default ("EC2-Default-SSM-Role"):
+  #   - LZA tags its role Accelerator=AWSAccelerator, so SCPs deny
+  #     iam:PutRolePolicy from Terraform on it (we can't customise).
+  #   - We've hit "InvalidParameterValue: Invalid IAM Instance Profile
+  #     name" against the LZA-provisioned profile in practice; a
+  #     Terraform-managed profile is the predictable path.
+  iam_instance_profile = aws_iam_instance_profile.moodle.name
   key_name             = var.key_name
 
   # First-boot bootstrap. The Bitnami Debian 12 Moodle AMI does NOT ship
