@@ -87,7 +87,8 @@ output "security_group_id" {
   value       = module.ec2.security_group_id
 }
 
-output "ami_id_used" {
-  description = "Ubuntu 22.04 AMI ID resolved from Canonical's SSM parameter at apply time."
-  value       = data.aws_ssm_parameter.ubuntu_2204_amd64.value
-}
+# NB: no `ami_id_used` output. `aws_ssm_parameter.value` is marked sensitive
+# by the AWS provider, so exporting it via a root-module output requires
+# `sensitive = true` and only shows as "(sensitive value)" in the plan.
+# The AMI ID appears in the plan on the instance itself and in
+# `aws ec2 describe-instances` after apply, which is enough.
