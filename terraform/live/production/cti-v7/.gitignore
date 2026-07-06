@@ -1,0 +1,5 @@
+# This leaf's terraform.tfvars contains only the account label, public
+# 12-digit account ID, AMI ID, VPC/subnet IDs, a private IP, and public
+# SIP/RTP peer CIDRs. All safe to commit. Override the parent
+# terraform/.gitignore so CI can read it via -var-file=terraform.tfvars.
+!terraform.tfvars
