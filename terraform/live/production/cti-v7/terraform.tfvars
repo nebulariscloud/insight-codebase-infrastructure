@@ -13,8 +13,10 @@ region       = "us-east-2"
 name          = "cti-v7"
 instance_type = "m5.2xlarge"
 
-# Copied+re-encrypted AMI in us-east-2 (Production).
-ami_id = "ami-07b69272c5caf9d33"
+# Clean AMI in us-east-2 (Production) — marketplace product code stripped via
+# source-tenant dd block-copy (the copy-image AMI ami-07b69272c5caf9d33 carried
+# a delisted CentOS marketplace code that blocked RunInstances; this one is clean).
+ami_id = "ami-0289fff8a491f450a"
 
 # shared-prod VPC + the public subnet created by the Option B exception.
 vpc_id           = "vpc-04a8720d0ddb40713"
