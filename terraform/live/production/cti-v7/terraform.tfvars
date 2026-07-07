@@ -24,6 +24,10 @@ public_subnet_id = "subnet-0919739a39165a934"
 
 root_volume_size_gib = 200
 
+# SSH key pair for admin access (create it before applying — see variables.tf).
+# Needed because this CentOS box has no SSM/EC2-Instance-Connect agent.
+key_name = "cti-v7-admin"
+
 # ebs_kms_key_arn left unset — the leaf auto-resolves
 # alias/accelerator/ebs/default-encryption/key via a data source.
 

@@ -99,6 +99,18 @@ variable "root_volume_size_gib" {
   default     = 200
 }
 
+variable "key_name" {
+  description = <<-EOT
+    EC2 key pair name for SSH admin access. Create it first with:
+      aws ec2 create-key-pair --region us-east-2 --key-name cti-v7-admin \
+        --query 'KeyMaterial' --output text > ~/.ssh/cti-v7-admin.pem
+    Empty = no key (SSM-only), but this CentOS box has no SSM/EIC agent, so
+    leave a key set or you lose all shell access.
+  EOT
+  type        = string
+  default     = ""
+}
+
 variable "ebs_kms_key_arn" {
   description = <<-EOT
     Optional override for the EBS encryption key ARN. Leave empty (default) to

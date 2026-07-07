@@ -91,6 +91,14 @@ module "ec2_migrated" {
   vpc_id        = var.vpc_id
   private_ip    = var.private_ip
 
+  # SSH key pair for admin access. The migrated CentOS disk carries the
+  # original box's "Aheeva" authorized_keys, but we don't hold that private
+  # key. Attaching our own key_name makes cloud-init inject our public key on
+  # boot so we can SSH in. NOTE: SSM/EC2 Instance Connect don't work on this
+  # box (no agent baked into the CentOS 7 image). Changing key_name replaces
+  # the instance.
+  key_name = var.key_name
+
   # Direct EIP — the whole point of Option B. Requires the SCP exception
   # (ec2:AllocateAddress / ec2:AssociateAddress) to be in place first.
   allocate_eip = true
