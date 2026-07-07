@@ -108,8 +108,14 @@ module "ec2_migrated" {
   root_volume_type       = "gp3"
   root_volume_kms_key_id = local.ebs_kms_key_arn
 
-  imdsv2_required         = true
-  monitoring              = true
+  imdsv2_required = true
+  # Detailed (1-minute) monitoring is intentionally OFF: the TerraformExecution
+  # allow-policy does not grant ec2:MonitorInstances, so monitoring=true fails
+  # the apply with UnauthorizedOperation. Basic 5-minute CloudWatch metrics are
+  # still collected. Flip to true only after adding ec2:MonitorInstances to
+  # aws-accelerator-config/iam-policies/terraform-execution-allow-policy.json
+  # (an LZA pipeline change).
+  monitoring              = false
   ebs_optimized           = true
   disable_api_termination = true
 
