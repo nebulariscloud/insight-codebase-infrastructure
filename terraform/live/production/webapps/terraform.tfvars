@@ -17,7 +17,8 @@ vpc_id    = "vpc-04a8720d0ddb40713"
 subnet_id = "subnet-00d31cac6422417c4" # shared-prod-app-a
 
 # Pinned so the ALB target stays stable across instance replacements.
-private_ip = "10.12.1.60"
+# NOTE: 10.12.1.60 was already in use in app-a; using .65 instead.
+private_ip = "10.12.1.65"
 
 root_volume_size_gib = 45
 
