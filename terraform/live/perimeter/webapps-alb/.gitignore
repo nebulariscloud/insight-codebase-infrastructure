@@ -1,0 +1,4 @@
+# terraform.tfvars here holds only account label, public account ID, VPC/subnet
+# IDs, private target IPs, hostnames, and a cert ARN — all safe to commit.
+# Override the parent terraform/.gitignore so CI can read it.
+!terraform.tfvars
