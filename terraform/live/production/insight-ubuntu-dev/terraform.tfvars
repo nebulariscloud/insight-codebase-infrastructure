@@ -22,3 +22,7 @@ private_ip = "10.12.1.71"
 root_volume_size_gib = 30
 
 eice_security_group_id = "sg-0a990a87e6abca926"
+
+# The ICC CRM app runs on this box — grant it access to the data plane
+# provisioned by the icc-crm-backend leaf (DynamoDB + S3 + Cognito).
+enable_icc_data_access = true
