@@ -78,3 +78,37 @@ variable "key_name" {
   type        = string
   default     = ""
 }
+
+# ----------------------------------------------------------------------------
+# ICC CRM data-access grant (see iam.tf)
+# ----------------------------------------------------------------------------
+
+variable "enable_icc_data_access" {
+  description = <<-EOT
+    Attach the `icc-data-access` inline policy to this box's instance role,
+    granting DynamoDB + S3 + Cognito access to the ICC CRM data plane
+    provisioned by the icc-crm-backend leaf. The app runs on this box.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "icc_dynamodb_table_names" {
+  description = "ICC DynamoDB table names to grant runtime access to. Must match the icc-crm-backend leaf."
+  type        = list(string)
+  default = [
+    "icc-crm",
+    "icc-crm-dev",
+    "icc-crm-audit",
+    "icc-crm-audit-dev",
+  ]
+}
+
+variable "icc_document_bucket_names" {
+  description = "ICC S3 document bucket names to grant runtime access to. Must match the icc-crm-backend leaf."
+  type        = list(string)
+  default = [
+    "insight-icc-documents",
+    "insight-icc-documents-dev",
+  ]
+}

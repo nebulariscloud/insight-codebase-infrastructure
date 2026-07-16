@@ -1,0 +1,5 @@
+# This leaf's terraform.tfvars contains only the account label, public
+# 12-digit account ID, region, table/bucket names, and frontend CORS
+# origins. All safe to commit. Override the parent terraform/.gitignore so
+# CI can read it via -var-file=terraform.tfvars.
+!terraform.tfvars
