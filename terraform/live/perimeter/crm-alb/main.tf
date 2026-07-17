@@ -1,5 +1,5 @@
 ###############################################################################
-# ICC ALB (Perimeter ingress) — public endpoint for the ICC CRM APIs
+# CRM ALB (Perimeter ingress) — public endpoint for the ICC CRM APIs
 #
 # A dedicated internet-facing ALB fronting the two ICC APIs that run on the
 # insight-ubuntu-dev box in shared-prod (Production account), reached cross-VPC
@@ -48,7 +48,7 @@ module "alb" {
 
   tags = {
     Cluster = "icc-crm"
-    Role    = "icc-alb"
+    Role    = "crm-alb"
   }
 }
 
@@ -72,7 +72,7 @@ resource "aws_acm_certificate" "icc" {
 
   tags = {
     Cluster = "icc-crm"
-    Role    = "icc-alb-cert"
+    Role    = "crm-alb-cert"
   }
 }
 

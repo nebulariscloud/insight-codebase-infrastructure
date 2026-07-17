@@ -1,5 +1,5 @@
 ###############################################################################
-# ICC ALB (Perimeter). Public endpoint for the ICC CRM APIs on the
+# CRM ALB (Perimeter). Public endpoint for the ICC CRM APIs on the
 # insight-ubuntu-dev box in shared-prod.
 #
 # TLS is staged (see variables.tf / README):
@@ -12,7 +12,7 @@
 
 account_name = "Perimeter"
 account_id   = "713939170920"
-stack_name   = "icc-alb"
+stack_name   = "crm-alb"
 region       = "us-east-2"
 
 # Same ingress VPC + public subnets as the shared ingress-alb / webapps-alb.
