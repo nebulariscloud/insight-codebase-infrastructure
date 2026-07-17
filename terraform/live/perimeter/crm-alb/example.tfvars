@@ -1,11 +1,11 @@
 ###############################################################################
-# Example values for the icc-alb leaf. Copy to terraform.tfvars and adjust.
+# Example values for the crm-alb leaf. Copy to terraform.tfvars and adjust.
 # All values here are safe to commit (no secrets).
 ###############################################################################
 
 account_name = "Perimeter"
 account_id   = "713939170920"
-stack_name   = "icc-alb"
+stack_name   = "crm-alb"
 region       = "us-east-2"
 
 ingress_vpc_id = "vpc-0f8cbc901a195b148"

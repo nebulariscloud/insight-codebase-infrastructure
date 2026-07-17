@@ -16,7 +16,7 @@ variable "account_id" {
 variable "stack_name" {
   description = "Short stack name."
   type        = string
-  default     = "icc-alb"
+  default     = "crm-alb"
 }
 
 variable "region" {

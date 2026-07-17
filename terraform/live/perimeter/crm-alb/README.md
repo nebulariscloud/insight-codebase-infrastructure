@@ -1,4 +1,4 @@
-# icc-alb (Perimeter)
+# crm-alb (Perimeter)
 
 Dedicated internet-facing ALB fronting the ICC CRM APIs. Sibling of
 `webapps-alb` — same ingress VPC, same cross-VPC-over-TGW pattern.
@@ -9,7 +9,7 @@ shared-prod), on different ports:
 | Hostname | Port | Target group |
 |---|---|---|
 | `crm.insightgrouppr.com` | `10.12.1.71:80` (prod API) | module default TG |
-| `crm-dev.insightgrouppr.com` | `10.12.1.71:81` (dev API) | `icc-alb-dev-tg` |
+| `crm-dev.insightgrouppr.com` | `10.12.1.71:81` (dev API) | `crm-alb-dev-tg` |
 
 Host-header rules on the listener split the two. Targets are IP-type with
 `availability_zone = "all"` because they live in another VPC (shared-prod) via
