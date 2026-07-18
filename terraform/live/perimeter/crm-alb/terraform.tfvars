@@ -33,6 +33,6 @@ dev_api_host  = "crm-dev.insightgrouppr.com"
 health_check_path    = "/"
 health_check_matcher = "200,301,302"
 
-# Start HTTP-only so the ACM cert can validate against external DNS.
-# Flip to true and re-apply once the cert is ISSUED.
-enable_https = false
+# Cert ISSUED 2026-07-17 (both crm + crm-dev validated). HTTPS listener on;
+# HTTP now 301-redirects to HTTPS.
+enable_https = true
