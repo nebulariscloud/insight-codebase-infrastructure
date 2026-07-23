@@ -30,8 +30,10 @@ dev_api_port       = 81
 prod_api_host = "crm.insightgrouppr.com"
 dev_api_host  = "crm-dev.insightgrouppr.com"
 
-health_check_path    = "/"
-health_check_matcher = "200,301,302"
+# The API root ("/") requires auth (401), so the health check must use the
+# unauthenticated /health endpoint the vendor's app exposes on both ports.
+health_check_path    = "/health"
+health_check_matcher = "200"
 
 # Cert ISSUED 2026-07-17 (both crm + crm-dev validated). HTTPS listener on;
 # HTTP now 301-redirects to HTTPS.
