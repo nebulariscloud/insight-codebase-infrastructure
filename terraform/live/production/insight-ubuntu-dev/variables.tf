@@ -112,3 +112,30 @@ variable "icc_document_bucket_names" {
     "insight-icc-documents-dev",
   ]
 }
+
+# ----------------------------------------------------------------------------
+# ICC CRM API ingress from crm-alb (see main.tf)
+# ----------------------------------------------------------------------------
+
+variable "enable_icc_alb_ingress" {
+  description = <<-EOT
+    Open the instance SG to the perimeter crm-alb on the ICC API ports. The
+    ALB is in another account/VPC reached over TGW, so this allows the
+    perimeter ingress VPC's CIDR (SG-to-SG references don't cross accounts
+    over TGW) rather than referencing the ALB's security group directly.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "icc_alb_ports" {
+  description = "Ports the ICC APIs listen on that crm-alb forwards to (prod, dev)."
+  type        = list(number)
+  default     = [80, 81]
+}
+
+variable "perimeter_ingress_vpc_cidr" {
+  description = "CIDR of the perimeter ingress VPC where crm-alb lives. Same value used by the webapps leaf."
+  type        = string
+  default     = "10.0.0.0/20"
+}

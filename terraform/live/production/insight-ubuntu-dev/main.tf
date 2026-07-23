@@ -14,6 +14,27 @@ data "aws_ssm_parameter" "ubuntu_2204_amd64" {
   name = "/aws/service/canonical/ubuntu/server/22.04/stable/current/amd64/hvm/ebs-gp2/ami-id"
 }
 
+###############################################################################
+# ICC CRM API ingress (crm-alb, Perimeter, over TGW)
+#
+# The crm-alb leaf fronts the ICC APIs on this box (prod :80, dev :81). SG
+# references don't work cross-account/cross-VPC over TGW, so — same pattern as
+# the `webapps` leaf — allow the perimeter ingress VPC's CIDR rather than the
+# ALB's security group. Toggle with var.enable_icc_alb_ingress.
+###############################################################################
+
+locals {
+  icc_alb_ingress_rules = var.enable_icc_alb_ingress ? [
+    for p in var.icc_alb_ports : {
+      from_port   = p
+      to_port     = p
+      protocol    = "tcp"
+      cidr_blocks = [var.perimeter_ingress_vpc_cidr]
+      description = "ICC API port ${p} from perimeter crm-alb"
+    }
+  ] : []
+}
+
 module "ec2" {
   source = "../../../modules/ec2-migrated"
 
@@ -40,7 +61,7 @@ module "ec2" {
     echo "[bootstrap] done: $(date -u)"
   EOT
 
-  ingress_rules = []
+  ingress_rules = local.icc_alb_ingress_rules
 
   root_volume_size = var.root_volume_size_gib
   root_volume_type = "gp3"

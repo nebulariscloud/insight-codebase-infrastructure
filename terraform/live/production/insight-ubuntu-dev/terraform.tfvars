@@ -26,3 +26,7 @@ eice_security_group_id = "sg-0a990a87e6abca926"
 # The ICC CRM app runs on this box — grant it access to the data plane
 # provisioned by the icc-crm-backend leaf (DynamoDB + S3 + Cognito).
 enable_icc_data_access = true
+
+# Open the instance SG to the crm-alb (Perimeter) on the ICC API ports.
+# Fixes the 504 Gateway Timeout: the ALB had no path in on 80/81.
+enable_icc_alb_ingress = true
