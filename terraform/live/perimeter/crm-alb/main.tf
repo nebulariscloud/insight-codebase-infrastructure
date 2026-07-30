@@ -106,6 +106,30 @@ resource "aws_lb_target_group" "dev" {
 }
 
 ###############################################################################
+# ALB egress to the DEV API port.
+#
+# The alb module opens egress for exactly one port — `target_port` (here the
+# prod API, :80). This leaf adds a SECOND backend port (:81) that the module
+# knows nothing about, so without this rule the ALB's own security group drops
+# its health checks to :81 before they leave. Symptom: zero SYN packets ever
+# arrive at the instance on 81 while :80 works fine (confirmed by packet
+# capture on the box, 2026-07-28).
+#
+# Keep var.alb_egress_cidrs aligned with the module's egress_cidrs default.
+###############################################################################
+
+resource "aws_vpc_security_group_egress_rule" "alb_to_dev_api" {
+  for_each = toset(var.alb_egress_cidrs)
+
+  security_group_id = module.alb.security_group_id
+  cidr_ipv4         = each.value
+  from_port         = var.dev_api_port
+  to_port           = var.dev_api_port
+  ip_protocol       = "tcp"
+  description       = "To dev API backend ${each.value}:${var.dev_api_port}"
+}
+
+###############################################################################
 # Target attachments — same box, two ports. availability_zone = "all" is
 # required because the IP target is outside the ALB's own VPC (shared-prod
 # via TGW).
