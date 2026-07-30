@@ -136,6 +136,16 @@ variable "enable_https" {
   default     = false
 }
 
+variable "alb_egress_cidrs" {
+  description = <<-EOT
+    CIDRs the ALB may reach on the DEV API port (:81). The alb module already
+    opens egress for the prod port; this covers the extra backend port this
+    leaf adds. Must match the module's egress_cidrs (default 10.0.0.0/8).
+  EOT
+  type        = list(string)
+  default     = ["10.0.0.0/8"]
+}
+
 variable "waf_web_acl_arn" {
   description = "Optional WAF Web ACL ARN to attach to the ALB. Empty to skip."
   type        = string
