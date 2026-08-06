@@ -3,6 +3,17 @@
 Destination MySQL 5.7 database for the CTI v7 cluster, migrated from the source
 tenant (`254422596287` / `us-east-1`) RDS `iccmaindb`.
 
+> **CI note — if a merge does not create anything.** This leaf merged twice
+> (PRs #50, #51) during a GitHub Actions incident in which `push` and
+> `pull_request` events were not delivered at all, so no plan or apply ever ran
+> and nothing was provisioned. GitHub does not replay missed events, so a merge
+> that silently produced no workflow run needs a **fresh commit touching any file
+> in this leaf** to make `detect` surface it again. Verify with
+> `gh run list --workflow terraform`; if the run is absent (rather than skipped),
+> suspect event delivery, not the config. A `workflow_dispatch` run is a useful
+> probe — it plans but deliberately cannot apply, since the apply job is gated on
+> `github.event_name == 'push'`.
+
 ## Source facts (confirmed)
 
 | Fact | Value |
