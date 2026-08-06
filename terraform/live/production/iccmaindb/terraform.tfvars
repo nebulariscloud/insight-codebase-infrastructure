@@ -25,20 +25,28 @@ vpc_id = "vpc-04a8720d0ddb40713"
 #   data-a subnet-092d9baf6d34778e2 = 10.12.0.64/26
 #   data-b subnet-0e802f8a78c72c225 = 10.12.0.128/26
 #
-# !! DECISION PENDING — Kennedy IP conflict — CONFIRM BEFORE MERGE !!
+# KNOWN ISSUE — revisit BEFORE CUTOVER, not before merge.
 # Both data subnets sit inside 10.12.0.0/24, which the client reported as the
-# Kennedy site's camera network. If that camera net is a /24 (or anything less
-# specific), the Kennedy FortiGate holds a more-specific local route for this
-# space and will never send DB traffic over the VPN — Kennedy's reporting clients
-# would not reach this database.
+# Kennedy site's camera network. If that camera net is a /24 (or less specific),
+# the Kennedy FortiGate holds a more-specific local route for this space and will
+# never send DB traffic over the VPN — Kennedy's reporting clients would not reach
+# this database.
 #
-# If Kennedy's camera network IS 10.12.0.0/24, swap these for the APP subnets,
-# which sit OUTSIDE the conflict and are still in two AZs (satisfying the RDS
-# multi-AZ subnet-group requirement):
+# Why this does NOT block the apply: until cutover this instance serves no traffic
+# (it only consumes binlogs), so changing its subnet group in that window costs a
+# brief interruption to a database nobody queries — just re-run
+# mysql.rds_start_replication afterwards. The expensive-to-reverse window opens at
+# cutover, not now.
+#
+# Pre-cutover action: get the COMPLETE IP inventory for all four sites (Liberty,
+# Kennedy, RD, Zima) — we only learned about the Kennedy cameras incidentally and
+# have no verified map. Then place the DB once, correctly. If a move is needed, the
+# app subnets are the fallback (outside 10.12.0.0/24, two AZs, so the RDS multi-AZ
+# subnet-group requirement is still satisfied):
 #   app-a  subnet-00d31cac6422417c4 = 10.12.1.0/24  (us-east-2a)
 #   app-b  <look up>                = 10.12.2.0/24  (us-east-2b)
-# Changing this now is one line; moving a live RDS instance between subnets later
-# is disruptive.
+# Note: app subnets are NOT automatically safe either — if any site uses 10.12.1.x
+# or 10.12.2.x they break instead. Hence needing the full map.
 db_subnet_ids = [
   "subnet-092d9baf6d34778e2",
   "subnet-0e802f8a78c72c225",
