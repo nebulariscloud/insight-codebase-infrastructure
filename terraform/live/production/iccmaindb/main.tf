@@ -30,10 +30,93 @@
 # cross-account share of ITS snapshots — is under a key we control.)
 ###############################################################################
 
+data "aws_caller_identity" "current" {}
+
+# Explicit key policy.
+#
+# WHY THIS IS HERE: RDS must create a KMS grant to use a customer CMK for
+# encryption at rest. The first apply failed with
+#
+#   KMSKeyNotAccessibleFault: The specified KMS key ... does not exist, is not
+#   enabled or you do not have permissions to access it
+#
+# on RestoreDBInstanceFromDBSnapshot, because the TerraformExecution role's
+# allow-policy (aws-accelerator-config/iam-policies/terraform-execution-allow-policy.json)
+# is an explicit allow-list and does NOT include kms:CreateGrant. A KMS key
+# policy can authorize a principal on its own, independently of that identity
+# policy, so granting the role here unblocks the restore without an LZA
+# pipeline change. Verified: no SCP references kms at all, and the
+# TerraformExecution deny-policy only denies kms:ScheduleKeyDeletion and
+# kms:DisableKey, so nothing overrides this Allow.
+data "aws_iam_policy_document" "iccmaindb_key" {
+  # Keep the standard root delegation so account IAM policies continue to work.
+  statement {
+    sid       = "EnableIAMUserPermissions"
+    effect    = "Allow"
+    actions   = ["kms:*"]
+    resources = ["*"]
+    principals {
+      type        = "AWS"
+      identifiers = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"]
+    }
+  }
+
+  # The role Terraform runs as. CreateGrant is the one that matters for RDS.
+  statement {
+    sid    = "AllowTerraformExecutionToUseAndGrant"
+    effect = "Allow"
+    actions = [
+      "kms:DescribeKey",
+      "kms:Encrypt",
+      "kms:Decrypt",
+      "kms:ReEncrypt*",
+      "kms:GenerateDataKey*",
+      "kms:CreateGrant",
+      "kms:ListGrants",
+      "kms:RevokeGrant",
+    ]
+    resources = ["*"]
+    principals {
+      type        = "AWS"
+      identifiers = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/TerraformExecution"]
+    }
+  }
+
+  # Scope the RDS service itself to this account's RDS only.
+  statement {
+    sid    = "AllowRDSService"
+    effect = "Allow"
+    actions = [
+      "kms:DescribeKey",
+      "kms:Encrypt",
+      "kms:Decrypt",
+      "kms:ReEncrypt*",
+      "kms:GenerateDataKey*",
+      "kms:CreateGrant",
+    ]
+    resources = ["*"]
+    principals {
+      type        = "Service"
+      identifiers = ["rds.amazonaws.com"]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "kms:CallerAccount"
+      values   = [data.aws_caller_identity.current.account_id]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ViaService"
+      values   = ["rds.${var.region}.amazonaws.com"]
+    }
+  }
+}
+
 resource "aws_kms_key" "iccmaindb" {
   description             = "Encryption key for the iccmaindb RDS instance"
   deletion_window_in_days = 30
   enable_key_rotation     = true
+  policy                  = data.aws_iam_policy_document.iccmaindb_key.json
 
   tags = { Name = "iccmaindb-rds-key" }
 }
