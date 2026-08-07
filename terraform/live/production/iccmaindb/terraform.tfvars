@@ -8,9 +8,20 @@ account_id   = "395516496764"
 stack_name   = "iccmaindb"
 region       = "us-east-2"
 
-# The destination snapshot to restore from — created in Part 1 (source snapshot ->
-# transfer CMK -> shared to Production -> cross-region copy + re-encrypt).
-snapshot_identifier = "iccmaindb-dest"
+# The destination snapshot to restore from.
+#
+# NOTE: this is the SECOND destination copy, re-encrypted onto this leaf's own CMK
+# (alias/iccmaindb-rds). The first copy (`iccmaindb-dest`) was encrypted with
+# alias/accelerator/ebs/default-encryption/key, whose key policy is scoped to
+# EC2 (`kms:ViaService = ec2.<region>.amazonaws.com`) and grants RDS nothing — so
+# RestoreDBInstanceFromDBSnapshot failed with KMSKeyNotAccessibleFault. Restoring
+# needs the snapshot's key to be usable by RDS, so we re-copied onto our own CMK:
+#
+#   aws rds copy-db-snapshot --region us-east-2 \
+#     --source-db-snapshot-identifier iccmaindb-dest \
+#     --target-db-snapshot-identifier iccmaindb-dest-cmk \
+#     --kms-key-id alias/iccmaindb-rds
+snapshot_identifier = "iccmaindb-dest-cmk"
 
 identifier            = "iccmaindb"
 instance_class        = "db.t3.small"
