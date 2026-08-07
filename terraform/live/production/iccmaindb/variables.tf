@@ -117,6 +117,43 @@ variable "app_client_cidrs" {
   default     = ["10.12.0.0/16"]
 }
 
+variable "vpn_client_cidrs" {
+  description = <<-EOT
+    CIDRs of the on-prem reporting clients that reach MySQL 3306 over the
+    Site-to-Site VPNs (Liberty, Insight Kennedy, Insight RD, Insight Zima).
+
+    Kept separate from app_client_cidrs on purpose: those are shared-prod
+    app-tier subnets, these are external sites arriving over the TGW VPN
+    attachments. Mixing them obscures which rule exists for whom.
+
+    Two kinds of entry:
+      * native ranges (172.x / 192.168.x) — arrive untranslated
+      * CGNAT ranges (100.64.x) — the sites' 10.234.x LANs source-NATted,
+        because 10.234.x collides with the LZA GlobalCidr 10.0.0.0/8 and is
+        unroutable here
+
+    NEVER add raw 10.234.x ranges; they never arrive with those addresses.
+    See docs/07-Operations/cti-v7-open-items.md section D for the per-site map.
+  EOT
+  type        = list(string)
+  default     = []
+}
+
+variable "read_only" {
+  description = <<-EOT
+    Set "1" while this instance is a replica of the source, so an accidental
+    write from a mis-pointed application is REJECTED rather than silently
+    diverging from the source (which would break replication with duplicate-key
+    or auto-increment collisions, and lose data at cutover).
+
+    The replica SQL thread is exempt, so replication still applies normally.
+
+    MUST be flipped to "0" at cutover, or the applications cannot write.
+  EOT
+  type        = string
+  default     = "1"
+}
+
 variable "source_replication_cidrs" {
   description = <<-EOT
     Temporary: CIDRs allowed inbound on 3306 for the ONGOING binlog replication
