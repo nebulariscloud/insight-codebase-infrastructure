@@ -41,13 +41,28 @@ if the DNS zone is external Terraform cannot create the validation records.
 
 ## Before the first apply
 
-- [ ] **Confirm `osticket_host`.** It is baked into the ACM cert, so changing it
-      later means issuing a new one. The tfvars value is a placeholder. There may
-      already be a hostname pointing at the old Lightsail IP `204.236.253.33`
-      that should simply be reused.
+- [x] **Confirm `osticket_host`.** Settled on `osticket.insightgrouppr.com` — it
+      already has a live A record, so it is the name in use rather than a new one.
+      Keep it **lowercase**: ACM normalises the domain name, and a mixed-case
+      value makes the `domain_validation_options` map key not match, which shows
+      up as a perpetual diff on `acm_validation_records`.
+      ⚠️ That A record resolves to `54.84.28.176`, **not** the Lightsail static IP
+      `204.236.253.33` recorded in the production leaf. Confirm which box is
+      actually serving before the DNS cutover.
 - [ ] **Decide `allowed_source_cidrs`.** Defaults to `0.0.0.0/0` because a ticket
       portal is usually public. If it is staff-and-partners only, tighten it —
       ticketing systems are a common target.
+
+## Changing the hostname after an apply
+
+`osticket_host` is the ACM cert's `domain_name`, so editing it **replaces the
+certificate**. That is cheap and safe while `enable_https = false` (nothing
+references the cert yet) and expensive once the HTTPS listener is live — the
+listener would briefly have no valid cert. Do hostname changes in stage 1.
+
+The first apply went out with `tickets.insightgrouppr.com`, which does not exist
+in DNS; the follow-up corrected it to `osticket.insightgrouppr.com` and the
+`tickets` cert was replaced while still `PENDING_VALIDATION`.
 
 ## Cutover
 
