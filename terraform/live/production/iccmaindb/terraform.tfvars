@@ -63,8 +63,46 @@ db_subnet_ids = [
   "subnet-0e802f8a78c72c225",
 ]
 
-# App-tier clients that reach MySQL (WS Aheeva, the two webapps). Private only.
+# App-tier clients that reach MySQL (WS Aheeva, the two webapps, osTicket, n8n —
+# anything inside shared-prod). Private only.
 app_client_cidrs = ["10.12.0.0/16"]
+
+# On-prem reporting clients arriving over the four Site-to-Site VPNs.
+# Native ranges arrive untranslated; 100.64.x are the sites' 10.234.x LANs
+# source-NATted (10.234.x collides with GlobalCidr 10.0.0.0/8 and is unroutable).
+# Never list raw 10.234.x here. Per-site map: docs/07-Operations/cti-v7-open-items.md §D
+vpn_client_cidrs = [
+  # --- Liberty (peer 23.249.138.106) ---
+  "172.16.10.0/24",
+
+  # --- Insight Kennedy / Puerto Rico HQ (peer 64.89.2.105) ---
+  "172.27.150.0/27",
+  "172.27.100.0/24",
+  "172.27.50.0/25",
+  "172.27.75.0/24",
+  "172.27.200.0/24",
+  "172.27.220.0/24",
+  "172.26.4.0/22",
+  "192.168.100.0/24",
+  "192.168.20.128/29",
+  "192.168.70.0/26",
+  "100.64.4.0/22", # NAT for 10.234.5.0/26
+
+  # --- Insight RD / Republica Dominicana (peer 190.166.239.186) ---
+  "172.20.0.0/24",
+  "172.20.1.0/24",
+  "172.20.2.0/24",
+  "172.20.3.0/24",
+  "172.20.4.0/24",
+  "100.64.0.0/22", # NAT for 10.234.3.0/24 + 10.234.4.0/24
+
+  # --- Insight Zima / Colombia (peer 181.207.82.178) ---
+  "100.64.8.0/22", # NAT for all 11 of Zima's 10.234.x subnets
+]
+
+# Replica guard — rejects accidental writes while replicating from the source.
+# !! SET TO "0" AT CUTOVER or the applications cannot write. !!
+read_only = "1"
 
 backup_retention_days = 7
 backup_window         = "07:00-09:00"

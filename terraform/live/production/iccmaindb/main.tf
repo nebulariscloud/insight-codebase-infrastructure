@@ -167,6 +167,21 @@ resource "aws_db_parameter_group" "iccmaindb" {
     apply_method = "immediate"
   }
 
+  # Replica guard. While this instance replicates from the source, an accidental
+  # write (e.g. an application repointed here early) would succeed silently,
+  # diverge from the source, and then break replication with duplicate-key /
+  # auto-increment collisions once the source writes the same rows.
+  #
+  # The replica SQL thread is exempt from read_only, so replication is unaffected.
+  #
+  # !! FLIP TO "0" AT CUTOVER !! Applications cannot write until you do.
+  # Tracked in docs/07-Operations/cti-v7-open-items.md.
+  parameter {
+    name         = "read_only"
+    value        = var.read_only
+    apply_method = "immediate"
+  }
+
   tags = { Name = "${var.identifier}-mysql57" }
 
   lifecycle {
@@ -198,6 +213,16 @@ resource "aws_vpc_security_group_ingress_rule" "mysql_app" {
   to_port           = 3306
   ip_protocol       = "tcp"
   description       = "MySQL from app-tier ${each.value}"
+}
+
+resource "aws_vpc_security_group_ingress_rule" "mysql_vpn" {
+  for_each          = toset(var.vpn_client_cidrs)
+  security_group_id = aws_security_group.iccmaindb.id
+  cidr_ipv4         = each.value
+  from_port         = 3306
+  to_port           = 3306
+  ip_protocol       = "tcp"
+  description       = "MySQL from VPN site ${each.value}"
 }
 
 resource "aws_vpc_security_group_ingress_rule" "mysql_replication" {
