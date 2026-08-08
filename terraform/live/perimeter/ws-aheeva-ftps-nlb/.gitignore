@@ -1,3 +1,0 @@
-# terraform.tfvars holds only account label, public account ID, IDs, ports, and
-# CIDRs — all safe to commit. Override the parent .gitignore.
-!terraform.tfvars
