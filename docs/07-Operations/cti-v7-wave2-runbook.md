@@ -274,6 +274,29 @@ our egress NAT EIPs yet (1.PRE.a).
 
 ## PART 2 — WS Aheeva AMI (transfer-CMK; final AMI at cutover)
 
+### 2.0 Pre-flight — run this FIRST
+
+Cheap, and it can reorder the whole plan. A marketplace product code is the one failure
+no retry fixes; it killed the CTI v7 apply *after* the leaf had already merged.
+
+```bash
+aws ec2 describe-images --region us-east-1 --image-ids ami-0f38562b9d4de0dfe \
+  --query 'Images[0].{Codes:ProductCodes,Platform:Platform,PlatformDetails:PlatformDetails,Root:RootDeviceName,Arch:Architecture,BDMs:BlockDeviceMappings}' \
+  --output json | cat
+```
+
+How to read it:
+
+- **`Codes` non-empty** → this is a `dd`-procedure box, not a `copy-image` box. Stop and
+  reroute.
+- **`Platform: windows`** → this is a **Windows** box, which changes a lot: the FTPS
+  server is IIS or FileZilla rather than vsftpd/proftpd, the Part 3 passive-range edit
+  is an entirely different procedure, admin access is SSM/RDP rather than SSH, and the
+  AMI carries Windows licensing. The `3389` rule in the source security group is the
+  hint that this is likely. Settle it before writing any in-box config steps.
+- **More than one `BDMs` entry** → secondary volumes exist. `copy-image` carries them;
+  the old `register-image` path would have silently dropped them.
+
 ### 2.1 Create AMI from source (source tenant, at cutover after draining queue)
 
 ```bash
@@ -287,41 +310,84 @@ WS_SNAP=$(aws ec2 describe-images --region us-east-1 --image-ids $WS_AMI \
 echo "WS_SNAP=$WS_SNAP"
 ```
 
-### 2.2 Re-encrypt to transfer CMK + share (source tenant)
+### 2.2 Re-encrypt the AMI onto the transfer CMK, in place (source tenant)
+
+**Rewritten 2026-08-07.** This step used to re-encrypt the *snapshot* and then
+`register-image` in the destination. Two problems with that. `register-image` makes you
+hand-retype every boot attribute (`--architecture`, `--root-device-name`,
+`--virtualization-type`, `--ena-support`, `--sriov-net-support`, `--boot-mode`) plus
+every block device mapping, and it silently drops secondary volumes if you map only
+`BlockDeviceMappings[0]`. And it was chosen in the belief that it sheds a marketplace
+product code, which the 2026-07-05 CTI v7 experience disproved — the code lives on the
+snapshot lineage and survives `register-image`, `copy-snapshot` and a volume
+round-trip alike. Only a block-level `dd` onto a blank volume severs it.
+
+`copy-image` re-encrypts *and* carries every boot attribute and BDM automatically. It
+works same-region, which is what turns this into a two-call chain.
 
 ```bash
-WS_XFER_SNAP=$(aws ec2 copy-snapshot --region us-east-1 --source-region us-east-1 \
-  --source-snapshot-id $WS_SNAP --encrypted --kms-key-id $XFER_KEY \
-  --description "ws-aheeva re-encrypted" --query SnapshotId --output text)
-aws ec2 wait snapshot-completed --region us-east-1 --snapshot-ids $WS_XFER_SNAP
-aws ec2 modify-snapshot-attribute --region us-east-1 --snapshot-id $WS_XFER_SNAP \
-  --attribute createVolumePermission --operation-type add --user-ids 395516496764
+# $XFER_KEY = the transfer CMK in the SOURCE tenant. osTicket used
+# e861c20e-209b-4a96-a184-10cf2e3c0c0d — reuse it rather than creating another.
+# Verify it is Enabled and CUSTOMER-managed first; an aws/* key cannot be shared:
+#   aws kms describe-key --region us-east-1 --key-id $XFER_KEY \
+#     --query 'KeyMetadata.{State:KeyState,Mgr:KeyManager}'
+
+WS_XFER_AMI=$(aws ec2 copy-image --region us-east-1 --source-region us-east-1 \
+  --source-image-id $WS_AMI --name "ws-aheeva-xfer-$(date +%Y%m%d)" \
+  --description "ws-aheeva re-encrypted onto the transfer CMK" \
+  --encrypted --kms-key-id $XFER_KEY --query ImageId --output text)
+echo "WS_XFER_AMI=$WS_XFER_AMI"
+aws ec2 wait image-available --region us-east-1 --image-ids $WS_XFER_AMI
 ```
 
-### 2.3 Copy cross-region + register AMI (Production, us-east-2)
+Share the AMI, its snapshots, **and** the key. All three are required — miss any one
+and the destination's `copy-image` fails with a permissions error that does not tell
+you which:
+
+```bash
+aws ec2 modify-image-attribute --region us-east-1 --image-id $WS_XFER_AMI \
+  --launch-permission "Add=[{UserId=395516496764}]"
+
+for S in $(aws ec2 describe-images --region us-east-1 --image-ids $WS_XFER_AMI \
+    --query 'Images[0].BlockDeviceMappings[].Ebs.SnapshotId' --output text); do
+  aws ec2 modify-snapshot-attribute --region us-east-1 --snapshot-id "$S" \
+    --attribute createVolumePermission --operation-type add --user-ids 395516496764
+  echo "shared $S"
+done
+
+# The transfer CMK's key policy must let Production use it: kms:DescribeKey,
+# kms:Decrypt, kms:ReEncrypt*, kms:CreateGrant. Already in place if it was set up
+# for the osTicket migration — confirm rather than assume.
+aws kms get-key-policy --region us-east-1 --key-id $XFER_KEY \
+  --policy-name default --output text | grep -A 5 395516496764
+```
+
+### 2.3 Copy cross-region into Production (Production, us-east-2)
+
+One call. Boot attributes and every block device mapping come along, and the LZA EBS
+key is applied in the same operation.
 
 ```bash
 LZA_EBS_KEY=$(aws kms describe-key --region us-east-2 \
   --key-id alias/accelerator/ebs/default-encryption/key --query 'KeyMetadata.Arn' --output text)
-WS_DEST_SNAP=$(aws ec2 copy-snapshot --region us-east-2 --source-region us-east-1 \
-  --source-snapshot-id $WS_XFER_SNAP --encrypted --kms-key-id "$LZA_EBS_KEY" \
-  --description "ws-aheeva clean" --query SnapshotId --output text)
-aws ec2 wait snapshot-completed --region us-east-2 --snapshot-ids $WS_DEST_SNAP
 
-# Confirm source AMI boot attrs (expect x86_64/hvm//dev/sda1/ENA true/sriov simple/boot null)
-aws ec2 describe-images --region us-east-1 --image-ids $WS_AMI \
-  --query 'Images[0].{Arch:Architecture,Root:RootDeviceName,Virt:VirtualizationType,Ena:EnaSupport,Sriov:SriovNetSupport,Boot:BootMode}' --output json
-
-WS_DEST_AMI=$(aws ec2 register-image --region us-east-2 --name "ws-aheeva-from-source" \
-  --architecture x86_64 --root-device-name /dev/sda1 --virtualization-type hvm \
-  --ena-support --sriov-net-support simple \
-  --block-device-mappings "[{\"DeviceName\":\"/dev/sda1\",\"Ebs\":{\"SnapshotId\":\"$WS_DEST_SNAP\",\"VolumeSize\":80,\"VolumeType\":\"gp3\",\"DeleteOnTermination\":true}}]" \
-  --query ImageId --output text)
+WS_DEST_AMI=$(aws ec2 copy-image --region us-east-2 --source-region us-east-1 \
+  --source-image-id $WS_XFER_AMI --name "ws-aheeva" \
+  --description "WS Aheeva migrated from source tenant" \
+  --encrypted --kms-key-id "$LZA_EBS_KEY" --query ImageId --output text)
 echo "WS_DEST_AMI=$WS_DEST_AMI"
+aws ec2 wait image-available --region us-east-2 --image-ids $WS_DEST_AMI
+
+# Verify before putting it in tfvars. ProductCodes MUST be empty.
+aws ec2 describe-images --region us-east-2 --image-ids $WS_DEST_AMI \
+  --query 'Images[0].{State:State,Codes:ProductCodes,Root:RootDeviceName,Arch:Architecture,Platform:PlatformDetails,BDMs:BlockDeviceMappings[].DeviceName}' \
+  --output json | cat
 ```
-> If register-image errors OptInRequired, the source AMI carries a marketplace
-> product code — do the block-level `dd` procedure (see CTI v7 journal). Not
-> expected here (webapps php73/server were clean).
+
+> **If `copy-image` fails with `OptInRequired`**, the source AMI carries a marketplace
+> product code and no amount of copying strips it. Route to the block-level `dd`
+> procedure in the CTI v7 journal instead. Run 2.0 and you will know this before
+> spending an hour on copies.
 
 ---
 
