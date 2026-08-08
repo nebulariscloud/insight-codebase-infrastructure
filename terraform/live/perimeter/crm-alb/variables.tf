@@ -146,8 +146,22 @@ variable "alb_egress_cidrs" {
   default     = ["10.0.0.0/8"]
 }
 
-variable "waf_web_acl_arn" {
-  description = "Optional WAF Web ACL ARN to attach to the ALB. Empty to skip."
-  type        = string
-  default     = ""
+# ----------------------------------------------------------------------------
+# WAF
+#
+# The Web ACL is built in this leaf by the waf-managed module and associated
+# with the ALB, so there is no ARN to pass in. Tuning knobs live here.
+# ----------------------------------------------------------------------------
+
+variable "waf_rate_limit" {
+  description = <<-EOT
+    Requests per 5 minutes per source IP before the rate-based rule blocks.
+    Matches the 2000 used on ingress-alb-waf / scriptcase-lb-waf.
+
+    This ALB fronts APIs, and API clients burst harder than browsers. If a
+    legitimate integration starts getting 403s, raise this (or add a scoped
+    allow entry) rather than removing the rule.
+  EOT
+  type        = number
+  default     = 2000
 }
