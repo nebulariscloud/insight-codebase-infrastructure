@@ -140,7 +140,99 @@ aws cloudwatch describe-alarms --alarm-name-prefix perimeter-waf- \
 
 - All 6 expected alarms exist (3 alarm types × 2 Web ACLs).
 - Naming pattern matches the design: `perimeter-waf-<webacl>-<alarm-type>`.
-- Every alarm is in `OK` state, which means CloudWatch is receiving metric data and no threshold has been breached on cold-start. Cold-start `INSUFFICIENT_DATA` would also have been acceptable; `ALARM` would have flagged a threshold sized too tightly. Neither is the case.
+
+> ### ⚠️ V3 CONCLUSION RETRACTED — 2026-08-06
+>
+> The original text of this section read: *"Every alarm is in `OK` state, which
+> means CloudWatch is receiving metric data and no threshold has been breached
+> on cold-start."*
+>
+> **That inference was invalid.** Every alarm in this module sets
+> `treat_missing_data = "notBreaching"`, so an alarm watching a metric that
+> does not exist also reports `OK`. The observed `OK` state was equally
+> consistent with zero metrics, and in fact that is what it was.
+>
+> **Root cause:** the `waf-monitoring` module specified the CloudWatch
+> namespace as `AWS/WAFv2` (lowercase `v`). The real namespace is `AWS/WAFV2`
+> (capital `V`) — see the AWS WAF developer guide, *Viewing metrics and
+> dimensions*: "The AWS WAF namespace is `AWS/WAFV2`". CloudWatch namespaces
+> are case-sensitive, so all six alarms and every dashboard widget resolved
+> against a namespace with no metrics in it.
+>
+> **Impact:** from 2026-06-21 to 2026-08-06 the WAF alarms could not fire under
+> any circumstances and the dashboard rendered empty. WAF itself was
+> unaffected throughout — traffic was inspected, rules were enforced, and logs
+> were delivered normally (V1/V2/V4 all remain valid). The defect was confined
+> to the observability layer.
+>
+> **How it was found:** `aws cloudwatch list-metrics --namespace AWS/WAFv2
+> --region us-east-2` returned `[]` while `AWS/ApplicationELB` `RequestCount`
+> showed all four ALBs actively serving traffic (ingress-alb 1268 req/3h,
+> crm-alb 484, osticket-alb 216, scriptcase-lb 20).
+>
+> **Remediation:** namespace corrected to `AWS/WAFV2` in all 8 occurrences in
+> `terraform/modules/waf-monitoring/main.tf`, plus a new per-Web-ACL
+> dead-man's-switch alarm (`<name>-<key>-no-metrics`: `AllowedRequests < 1`
+> with `treat_missing_data = "breaching"`) so that "this alarm is watching
+> nothing" becomes a firing condition instead of a silent pass.
+>
+> **Process lesson:** never accept alarm *state* as evidence that a metric
+> pipeline works. Assert on the datapoints. See V3-R below for the corrected
+> verification.
+
+## V3-R — Alarm metric pipeline actually publishes data (re-verification)
+
+Added 2026-08-06 to replace the retracted V3 check. The lesson from the
+namespace defect is that alarm *state* proves nothing when
+`treat_missing_data = "notBreaching"`. This check asserts on datapoints.
+
+**Status: PENDING** — run after the namespace fix is merged and applied.
+
+**Command**
+
+```bash
+# 1. The namespace must be non-empty. This is the check that would have
+#    caught the original defect.
+aws cloudwatch list-metrics --namespace AWS/WAFV2 --region us-east-2 \
+  --query 'length(Metrics)' --output text
+# PASS: a number > 0.   FAIL: 0 or empty.
+
+# 2. Dimension sets AWS actually emits must match what the alarms specify.
+aws cloudwatch list-metrics --namespace AWS/WAFV2 --region us-east-2 \
+  --query 'Metrics[].{Metric:MetricName,Dims:Dimensions[].{N:Name,V:Value}}' \
+  --output json | head -40
+# PASS: dimension names are exactly WebACL / Region / Rule.
+
+# 3. A real datapoint must exist for each Web ACL.
+for acl in ingress-alb-waf scriptcase-lb-waf crm-alb-waf osticket-alb-waf; do
+  n=$(aws cloudwatch get-metric-statistics \
+    --namespace AWS/WAFV2 --metric-name AllowedRequests \
+    --dimensions Name=WebACL,Value=$acl Name=Region,Value=us-east-2 Name=Rule,Value=ALL \
+    --start-time "$(date -u -d '2 hours ago' +%Y-%m-%dT%H:%M:%SZ)" \
+    --end-time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --period 300 --statistics Sum --region us-east-2 \
+    --query 'length(Datapoints)' --output text)
+  printf "%-20s datapoints(2h)=%s\n" "$acl" "$n"
+done
+# PASS: every Web ACL reports a non-zero count.
+
+# 4. The liveness alarms must exist and must NOT be in INSUFFICIENT_DATA
+#    once metrics are flowing.
+aws cloudwatch describe-alarms --alarm-name-prefix perimeter-waf- \
+  --region us-east-2 \
+  --query 'MetricAlarms[].[AlarmName,StateValue,Namespace]' --output table
+# PASS: Namespace column reads AWS/WAFV2 on every row; the -no-metrics
+#       alarms sit in OK (they alarm on absence, so OK = metrics present).
+```
+
+**Pass criteria**
+
+- `AWS/WAFV2` namespace returns a non-zero metric count.
+- Emitted dimension names match the alarm definitions exactly.
+- Every Web ACL has at least one real datapoint in a recent window.
+- Every alarm's `Namespace` field reads `AWS/WAFV2`.
+- The four `-no-metrics` liveness alarms report `OK`, proving positively that
+  metrics are arriving rather than merely that no threshold was crossed.
 
 ## V4 — SNS subscriptions confirmed for all three severity tiers
 
@@ -185,12 +277,20 @@ done
 
 | Verification | Status |
 |---|---|
-| V1 — Logs bucket exists, KMS-encrypted, hardened | Pass |
-| V2 — Logging attached to both Web ACLs with header redaction | Pass |
-| V3 — All 6 CloudWatch alarms exist and healthy | Pass |
-| V4 — All 3 SNS topic subscriptions confirmed | Pass |
+| V1 — Logs bucket exists, KMS-encrypted, hardened | Pass (2026-06-21) |
+| V2 — Logging attached to both Web ACLs with header redaction | Pass (2026-06-21) |
+| V3 — All 6 CloudWatch alarms exist and healthy | **Alarms exist: pass. "Healthy" conclusion RETRACTED 2026-08-06** — see the callout in V3. Namespace typo meant the alarms watched a non-existent namespace. |
+| V3-R — Alarm metric pipeline publishes real datapoints | **Pending** — run after the namespace fix applies |
+| V4 — All 3 SNS topic subscriptions confirmed | Pass (2026-06-21) |
 
-All four verifications passed on first run. The WAF deployment is operationally live.
+V1, V2 and V4 remain valid — the filtering, logging and notification paths were
+never affected. V3's *existence* check was valid; its *health* conclusion was
+not, and is superseded by V3-R.
+
+**What was actually broken, stated plainly:** for seven weeks the WAF inspected
+traffic, enforced rules and delivered logs correctly, but nobody would have been
+emailed if it had started blocking heavily, and the dashboard was blank. The
+protection worked; the alerting did not.
 
 ## Items not part of this verification
 

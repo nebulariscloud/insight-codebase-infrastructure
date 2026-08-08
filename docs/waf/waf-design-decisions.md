@@ -240,6 +240,59 @@ Low is reserved for future use (daily summary, capacity-planning alerts) — var
 
 **When to extend:** If two leaves need the same complex pattern, lift it into the module. Don't pre-build for hypothetical patterns.
 
+### D13 — Dead-man's-switch alarm alongside the threshold alarms
+
+**Added 2026-08-06, in response to a real defect.**
+
+**Decision:** every Web ACL gets a `<name>-<key>-no-metrics` alarm on
+`AllowedRequests < 1` with `treat_missing_data = "breaching"`, in addition to
+the three threshold alarms from D9.
+
+**What happened:** the original module set the CloudWatch namespace to
+`AWS/WAFv2`. The real namespace is `AWS/WAFV2` — capital V, and CloudWatch
+namespaces are case-sensitive. Because all three threshold alarms use
+`treat_missing_data = "notBreaching"`, they reported `OK` continuously for
+seven weeks while resolving against a namespace containing no metrics. The
+2026-06-21 verification recorded "all 6 alarms OK" and treated that as proof
+the pipeline worked. It wasn't proof of anything.
+
+**Why the threshold alarms cannot detect this themselves:** `notBreaching` is
+the right setting for a "too many blocks" alarm — no data genuinely is good
+news when you are counting bad events. But that same property makes a
+misconfigured alarm indistinguishable from a healthy one. The failure mode is
+silent by construction.
+
+**Alternatives considered:**
+
+- *Switch the threshold alarms to `treat_missing_data = "missing"`.* Would
+  surface the problem as `INSUFFICIENT_DATA`, but conflates "metric pipeline
+  broken" with "quiet period", and `INSUFFICIENT_DATA` is widely ignored in
+  practice precisely because it is usually benign.
+- *Switch to `breaching` on the threshold alarms.* Would page on every quiet
+  overnight window. Unusable.
+- *Rely on the dashboard.* A blank dashboard is only noticed by someone who
+  opens it. Nobody opened it for seven weeks, which is exactly the point.
+- *A synthetic canary hitting each endpoint.* Solves a broader problem
+  (end-to-end reachability) at meaningfully more cost and complexity. Worth
+  considering separately; overkill as a fix for a namespace typo.
+
+**Why an inverted alarm:** it converts "this alarm is watching nothing" from a
+silent pass into a firing condition, using the same metric plumbing the real
+alarms depend on. If the namespace, dimensions, or Web ACL association break,
+`AllowedRequests` stops resolving and the alarm fires on missing data. It is a
+one-resource test of the whole path.
+
+**Trade-off:** false positives on genuinely idle endpoints. Mitigated by
+`liveness_evaluation_periods` (default 12 periods = 1 hour of silence) and an
+`enable_liveness_alarm` per-stack off switch for workloads with legitimate
+zero-traffic windows.
+
+**Process change this implies:** verification must assert on datapoints, not on
+alarm state. `waf-verification-record.md` V3-R encodes this — it checks that the
+namespace is non-empty, that emitted dimension names match the alarm
+definitions, and that each Web ACL has a real datapoint, before drawing any
+conclusion from a green alarm.
+
 ## What this leaves on the table
 
 Honest list of things the design doesn't cover, and why:
@@ -257,3 +310,4 @@ Honest list of things the design doesn't cover, and why:
 | Date | Change | PR |
 |---|---|---|
 | 2026-06-21 | Initial design record. WAF SOW implementation merged. | feat/waf-sow-implementation |
+| 2026-08-06 | Added D13 (dead-man's-switch alarm) after finding the `AWS/WAFv2` → `AWS/WAFV2` namespace typo had silently disabled all alarms since delivery. | fix/waf-monitoring-namespace |

@@ -1,0 +1,107 @@
+# WAF SOW — status review and remaining follow-ups
+
+- **Created:** 2026-08-06 ??:??
+- **Last updated:** 2026-08-06 ??:??
+- **Status:** active
+- **One-line summary:** The AWS WAF Implementation SOW was delivered and verified on 2026-06-21 (PRs #29/#30/#31); this journal tracks the four small follow-ups that were deliberately left open, plus one WAF coverage gap discovered on review.
+
+## Context
+
+The AWS WAF Implementation SOW (Nebularis → Insight Group, signed March 2026, $8,500) was delivered on 2026-06-21 across three PRs. All four post-deployment verifications passed on first run and are recorded verbatim in `docs/waf/waf-verification-record.md`. The SOW closeout doc (`docs/waf/waf-sow-closeout.md`) is written and carries a sign-off block.
+
+Four items were knowingly left open at closeout — three are small operational follow-ups (baseline capture, threshold tuning, optional Bot Control rollout), one is externally gated (PCI ALB). None block SOW acceptance.
+
+This review (2026-08-06, ~7 weeks after delivery) found that none of the four have progressed, and surfaced a fifth item that did not exist at closeout: a new internet-facing ALB was added without a WAF.
+
+## Files touched
+
+| Path | What changed | Why |
+|---|---|---|
+| `.kiro/journal/2026-08-06-waf-sow-status-review.md` | created | The WAF work predates the journal system (system built 2026-06-26, WAF delivered 2026-06-21), so no WAF journal existed. Created one to carry the open threads forward. |
+| `terraform/live/perimeter/crm-alb/main.tf` | added `module "waf"` (waf-managed, REGIONAL), wired `waf_web_acl_arn = module.waf.web_acl_arn` | ALB was internet-facing with no WAF. Uses the in-leaf pattern documented in `live/_template/main.tf` rather than a separate leaf, so no ARN copy-paste between states. |
+| `terraform/live/perimeter/crm-alb/variables.tf` | removed unused `waf_web_acl_arn`, added `waf_rate_limit` (default 2000) | The ARN now comes from the module, so the input variable was dead — and `.tflint.hcl` enables `terraform_unused_declarations`. |
+| `terraform/live/perimeter/osticket-alb/main.tf` | same as crm-alb | Same gap. Comment records why `SizeRestrictions_BODY` must stay in Count (osTicket file attachments = large multipart POSTs). |
+| `terraform/live/perimeter/osticket-alb/variables.tf` | same swap as crm-alb | Same reason. |
+| `terraform/live/perimeter/waf-logs/{main,variables}.tf` + `terraform.tfvars` | replaced the two hardcoded `*_web_acl_name` vars with a single `web_acl_names` list; data lookup is now `for_each` | Third and fourth Web ACL were being added; a list stops this leaf needing an edit per Web ACL. PCI will be the fifth. |
+| `terraform/live/perimeter/waf-monitoring/{main,variables}.tf` + `terraform.tfvars` | replaced the two hardcoded name vars with a `web_acls` map (key -> name); added `crm` + `osticket` | Same extensibility reason. Map keys feed alarm names so they're stable identifiers. |
+
+## Decisions
+
+- **Web ACL built inside each ALB leaf, not as a separate `*-waf` leaf.** Follows the pattern already documented in `terraform/live/_template/main.tf` (`module "waf"` → `module "alb"`). Alternatives considered: a standalone `crm-waf` / `osticket-waf` leaf per ALB, which would have meant copy-pasting the Web ACL ARN between two states (the repo does that for private IPs, e.g. sftp-server → sftp-nlb) — rejected because it doubles the PR count and adds a manual hand-off step for no benefit when the same leaf owns both resources.
+- **One Web ACL per ALB, not one shared.** ~$5/month extra. `crm-alb` fronts JSON APIs, `osticket-alb` fronts a PHP ticket portal with file uploads — very different false-positive profiles. A tuning change for one should not be able to break the other. User was asked and did not object.
+- **`waf-logs` / `waf-monitoring` refactored to take a list/map instead of per-Web-ACL variables.** Accepted a one-time destroy+create of the two existing `aws_wafv2_web_acl_logging_configuration` resources (state addresses change from `[0]`/`[1]` style to name-keyed `for_each`). Safe: a logging configuration is just a pointer, holds no data, and WAF keeps filtering traffic throughout — worst case is a brief gap in log delivery. Chosen because PCI will be the fifth Web ACL and the per-Web-ACL-variable pattern was already unwieldy at four.
+- **PCI ALB deployment deferred — reversal of the earlier "blockers have cleared" read.** The account and VPC do exist, but discovery showed `aws acm list-certificates` in PCI `247514667218` returns **empty**, and there are zero ALBs and zero workloads in the account. PCI DSS requires TLS for cardholder data in transit, so an HTTP-only PCI ALB is not a valid interim step. Deploying now would mean paying ~$21/month (ALB + Web ACL + rule fees) for an ALB pointing at nothing, fronting a workload that does not exist, with no hostname to put on a cert. Correct sequence is: PCI workload defined → hostname chosen → cert issued → then uncomment `PciAlb`. No WAF work is the blocker here.
+- **WAF SOW is considered delivered and closed.** All five SOW acceptance criteria are met or explicitly dispositioned in `docs/waf/waf-sow-closeout.md`. Bot Control is recorded as "capability delivered, rollout deferred per design decision D6" rather than incomplete.
+- **Did not mass-pause the five other active journals.** The session-journal protocol says to pause the prior active journal on topic switch, but this repo legitimately runs five parallel workstreams that all sit at `Status: active` (ubuntu provisioning, June cost analysis, ICC CRM backend, EasyAudit OIDC, Scriptcase target group). This turn is a status question, not a workstream switch, so pausing unrelated records would have destroyed useful state.
+
+## Open threads
+
+- [x] **DEFECT FOUND AND FIXED IN CODE (not yet merged): CloudWatch namespace typo disabled every WAF alarm for 7 weeks.**
+  - **Root cause:** `terraform/modules/waf-monitoring/main.tf` specified `namespace = "AWS/WAFv2"` (lowercase `v`). The real namespace is **`AWS/WAFV2`** (capital `V`) — confirmed against the AWS WAF developer guide *Viewing metrics and dimensions*: "The AWS WAF namespace is `AWS/WAFV2`". CloudWatch namespaces are case-sensitive.
+  - **Evidence:** `aws cloudwatch list-metrics --namespace AWS/WAFv2 --region us-east-2` → `[]` (entire namespace empty), while `AWS/ApplicationELB` `RequestCount` over 3h showed ingress-alb 1268, crm-alb 484, osticket-alb 216, scriptcase-lb 20. Traffic was flowing; the namespace was simply wrong.
+  - **Why it stayed hidden:** all three threshold alarms use `treat_missing_data = "notBreaching"`, so a namespace that resolves to nothing renders as `OK`. The 2026-06-21 verification read "all 6 alarms OK" and concluded the pipeline worked. Invalid inference.
+  - **Blast radius:** observability only. WAF inspected traffic, enforced rules and delivered logs correctly the whole time (V1/V2/V4 unaffected). Nobody would have been emailed on a block spike, and the dashboard was blank.
+  - **Fix applied in code:** namespace corrected in all 8 occurrences; added `aws_cloudwatch_metric_alarm.metric_liveness` per Web ACL (`AllowedRequests < 1`, `treat_missing_data = "breaching"`) as a dead-man's switch so "watching nothing" now fires; added `metrics_namespace` output so verification can assert it; new vars `enable_liveness_alarm` / `liveness_evaluation_periods`; loud DO-NOT-REVERT comment at the top of the module.
+  - **Verified the REST of the module against AWS docs** (having been burned once by assuming): namespace `AWS/WAFV2` ✓; dimensions `WebACL` / `Rule` / `Region` all real, and `Region` is explicitly "Required for all protected resource types except CloudFront" so it belongs on REGIONAL ✓; metric names `AllowedRequests` / `BlockedRequests` / `CountedRequests` all real ✓. Conclusion: the June alarms had correct dimensions and metric names — the namespace string was the *only* defect.
+  - **Second flaw caught pre-merge from the same doc:** every WAF metric carries "Reporting criteria: There is a nonzero value" — WAF publishes **no datapoint at all** for a zero interval rather than a zero. My liveness alarm was originally `period = 300` / 12 periods, which would have flapped constantly on low-traffic Web ACLs (scriptcase-lb measured 20 requests per 3 hours = most 5-minute windows legitimately empty → missing → breaching). Changed to `period = 3600` with `liveness_evaluation_periods` default 3 (3 hours of silence) and a `>= 2` validation. Threshold alarms keep `period = 300` since they only need to catch live spikes.
+  - **Docs corrected:** `waf-verification-record.md` V3 carries a retraction callout and a new **V3-R** that asserts on datapoints and dimension names instead of alarm state; summary table updated; `waf-design-decisions.md` gains **D13** covering the dead-man's-switch rationale and the four alternatives rejected.
+  - **Still to do:** merge, apply, then run V3-R to confirm metrics resolve.
+- [ ] **Two internet-facing ALBs have no WAF attached.** Both are Terraform-managed in Perimeter `713939170920` / us-east-2, both `scheme = "internet-facing"`, both default `allowed_source_cidrs = ["0.0.0.0/0"]`, and both wire `waf_web_acl_arn` through to `modules/alb` but never set it in `terraform.tfvars` (so it defaults to `""` = no association):
+  - `terraform/live/perimeter/crm-alb/` — hosts `crm.insightgrouppr.com` + `crm-dev.insightgrouppr.com`, backend `10.12.1.71`, HTTPS on. Renamed from `icc-alb` in PR #45.
+  - `terraform/live/perimeter/osticket-alb/` — hosts `tickets.insightgrouppr.com`, backend `10.12.1.67`, HTTPS **off** (HTTP only). Landed PR #56.
+  - Fix: one `waf-managed` Web ACL per ALB (or one shared), then set `waf_web_acl_arn` in each tfvars.
+  - Note: `webapps-alb` (the gap flagged earlier this session) was never applied — commit `3b02aa7` says "staged, not applied" and the leaf is gone from the tree. Superseded by `crm-alb` / `osticket-alb`.
+- [ ] **Traffic baseline never captured.** `docs/waf/waf-traffic-baseline.md` is still all `TBD`. Needs someone to open the `perimeter-waf` CloudWatch dashboard, set range to last 7 days, and fill in p50/p95/max per Web ACL per metric. There is now ~7 weeks of data available, so this is easier than it was at closeout.
+- [ ] **Alarm thresholds never narrowed.** Still at the intentionally-generous cold-start defaults in `terraform/live/perimeter/waf-monitoring/main.tf`: `blocked_requests_threshold = 1000`, `rate_limit_block_threshold = 200`, `common_rule_set_block_threshold = 500` (all per 5-min window). Target is ~3× p95 once the baseline above is captured. One small PR.
+- [ ] **Bot Control not enabled** (optional, cost decision). `modules/waf-managed` supports it via `enable_bot_control`. Rollout procedure is in `docs/waf/waf-tuning-guide.md`: Scriptcase first, Count mode 7 days, promote to Block, then Ingress. ~$10/Web ACL/month plus per-request charges.
+- [ ] **PCI ALB — DEFERRED, waiting on a PCI workload, not on WAF.** Infrastructure discovery in PCI account `247514667218` / us-east-2 on 2026-08-06:
+  - PCI account exists — `accounts-config.yaml` line 56, OU `Workloads/PCI`
+  - PCI VPC live — `vpc-0766c6bceb81ea3fa`, `10.16.0.0/20`
+  - Public subnets live — `subnet-04e4afbc43dccc28a` (us-east-2a, 10.16.0.0/24), `subnet-084f64c332115bbd8` (us-east-2b, 10.16.1.0/24)
+  - **ACM certificates: none** — `list-certificates` returns empty
+  - **ALBs: none. Web ACLs: none. No workload of any kind deployed.**
+  - `PciAlb` block still commented out at `customizations-config.yaml` line 165.
+  - Blocked on the *business* input, not engineering: what PCI workload is going in, and what hostname does it answer on. PCI DSS requires TLS in transit for cardholder data, so HTTP-only is not a valid interim. The `pci-alb-waf` Web ACL is already written and tuned in `custom-stacks/pci-alb.yaml` (`AWSManagedRulesSQLiRuleSet` + `AWSManagedRulesLinuxRuleSet`, rate limit 500/5min/IP vs 2000 elsewhere) and ships automatically once the block is enabled.
+  - Values to paste in when it is time: `VpcId: vpc-0766c6bceb81ea3fa`, `PublicSubnetA: subnet-04e4afbc43dccc28a`, `PublicSubnetB: subnet-084f64c332115bbd8`, `AccessLogsBucketName: aws-accelerator-elb-access-logs-247514667218-us-east-2`, `CertificateArn: <issue in PCI account first>`.
+
+## PR status
+
+| PR | Branch | State | Waiting on |
+|---|---|---|---|
+| **#59** | `fix/waf-monitoring-namespace` | Open, pushed | Review + merge. Applying restores all WAF alarms. Merge this first. |
+| **#60** | `feat/waf-crm-osticket` | Open, pushed | Review + merge. Creates the two missing Web ACLs. |
+| — | `feat/waf-logs-monitoring-lists` | **Committed locally at `1da3ff3`, deliberately NOT pushed** | #60 being *applied*. `waf-logs` resolves Web ACL ARNs by name at plan time, so pushing before `crm-alb-waf` exists produces a failing plan (`WAFNonexistentItemException`). |
+
+Push PR 3 once #60 has applied:
+
+```bash
+git push -u insight-remote feat/waf-logs-monitoring-lists
+gh pr create --base main --head feat/waf-logs-monitoring-lists \
+  --repo nebulariscloud/insight-codebase-infrastructure \
+  --title "feat(waf): logging + alarms for all four perimeter Web ACLs" \
+  --body-file /tmp/waf-pr3-body.md
+```
+
+Collision check done: PR #57 (`osticket-hostname`) also touches `osticket-alb/` but only `README.md` / `example.tfvars` / `terraform.tfvars`, whereas #60 touches `main.tf` / `variables.tf`. No overlap; both report `MERGEABLE`.
+
+Note: this journal file is carried by PR #59, so it only exists on that branch until #59 merges to `main`.
+
+## Activity log
+
+- **2026-08-06 ??:??** — Audited the whole monitoring module against the AWS WAF metrics doc instead of assuming. Dimensions and metric names all check out; namespace was the sole defect. But the doc's "Reporting criteria: There is a nonzero value" line exposed a second flaw in the liveness alarm I'd just written — at `period = 300` it would flap on sparse traffic (scriptcase-lb: 20 req/3h). Moved liveness to `period = 3600`, default 3 periods, with a `>= 2` validation guard. All five leaves/modules validate; `fmt -check -recursive` clean across `terraform/`. Gave user the 3-PR git sequence. Answered "is everything good" honestly: code is correct and validated but **nothing is merged or applied**, and V3-R is unproven until it is.
+- **2026-08-06 ??:??** — **Root cause found.** `list-metrics --namespace AWS/WAFv2` returned `[]` — the whole namespace, not just a dimension mismatch — while ALB `RequestCount` proved traffic on all four ALBs (ingress 1268/3h, crm 484, osticket 216, scriptcase 20). Confirmed against AWS docs that the namespace is `AWS/WAFV2` with a capital V and that CloudWatch namespaces are case-sensitive; my June module shipped lowercase `v`. So my earlier hypothesis (bad `Region` dimension) was wrong — the dimensions are fine, the namespace string was the bug. Fixed all 8 occurrences, added a dead-man's-switch liveness alarm + `metrics_namespace` output + a do-not-revert comment, retracted V3 in the verification record and replaced it with datapoint-asserting V3-R, added D13 to the design decisions. `fmt` + `validate` clean. Three PRs now queued: (1) namespace fix, (2) crm/osticket WAF, (3) waf-logs/waf-monitoring lists.
+- **2026-08-06 ??:??** — Reissued metric query at 4 days ran without error but returned **empty tables for all 6 metric/ACL combinations**, and empty for the `Rule=RateLimit` slice too. Zero datapoints, not a query syntax problem. Traced to the alarms in `waf-monitoring/main.tf` using `dimensions = {WebACL, Region, Rule}` with `treat_missing_data = "notBreaching"` — so if that dimension set never matches, alarms sit in `OK` forever and the June V3 verification ("all 6 alarms OK") proved nothing. Logged as a suspected defect in the delivered work; asked user to run `cloudwatch list-metrics --namespace AWS/WAFv2` to read the real dimension sets before I guess at a fix. Baseline/threshold work is blocked behind this — no point deriving p95 from metrics that may not exist.
+- **2026-08-06 ??:??** — Discovery output received. Perimeter confirmed code-matches-reality: `ingress-alb`/`scriptcase-lb` have WAF, `crm-alb`/`osticket-alb` show `WAF=None`, only 2 Web ACLs exist in the account. Block 2 (metrics) **failed**: `InvalidParameterCombination ... requested up to 2016 datapoints, which exceeds the limit of 1440` — 7 days at `--period 300` is 2016 points. Reissued at 4 days (1152 points) to stay under the cap while keeping 5-min granularity matching the alarm period. PCI discovery returned VPC + subnets but **zero ACM certs, zero ALBs, zero workloads** → reversed the PCI plan to "defer" (see Decisions). Wrote the WAF into `crm-alb` + `osticket-alb` and refactored `waf-logs`/`waf-monitoring` to list/map inputs. `terraform fmt` clean, `validate` clean on all four leaves. Note: branch `ws-aheeva-leaf` has unrelated **staged** `ws-aheeva-ftps-nlb/` files — must not be swept into the WAF commits.
+- **2026-08-06 ??:??** — Clarified the discovery commands are CloudShell-ready. Reissued Block 2 with GNU `date -u -d '7 days ago'` instead of BSD `date -u -v-7d` — CloudShell runs Amazon Linux, so the macOS flag would have failed. Blocks 1 and 3 have no date dependency and were already fine.
+- **2026-08-06 ??:??** — User greenlit all remaining items and asked for infra discovery commands, noting the PCI account now exists and there are more load balancers. Re-scanned the repo at `0be26fe` (branch `ws-aheeva-leaf`, level with `insight-remote/main`) — the tree has moved a lot since June. Corrected the inventory: `webapps-alb` was never applied (`3b02aa7` "staged, not applied") and is gone; the actual unprotected ALBs are now **`crm-alb`** (PR #45, `crm.insightgrouppr.com` + `crm-dev`, HTTPS on) and **`osticket-alb`** (PR #56, `tickets.insightgrouppr.com`, HTTP only). Both internet-facing, both `0.0.0.0/0`, neither sets `waf_web_acl_arn`. Confirmed PCI account + PCI VPC are both live, so `PciAlb` is now unblocked pending three discovery values (VPC id, 2 subnet ids, ACM cert ARN). Issued a discovery command set for Perimeter + PCI; awaiting output before writing code.
+- **2026-08-06 ??:??** — User asked for a plainer re-explanation (7 weeks of context gone). Re-framed the status without jargon: WAF = the filter in front of the websites; SOW is paid-and-done; the only item that actually matters is that `webapps-alb` is an unprotected front door. Restated the other three items as optional housekeeping. No repo changes.
+- **2026-08-06 ??:??** — User returned after ~7 weeks asking what was left on the WAF proposal. Reviewed repo state: all 8 docs present in `docs/waf/`, WAF work landed via PRs #29 (`483de4e` implementation), #30 (`1e9adb8` design ADR), #31 (`8bb1ba1` closeout + verification record); no WAF commits since. Confirmed the four closeout follow-ups are all still open and unstarted. **New finding:** `terraform/live/perimeter/webapps-alb/` (CTI v7 cluster webapps, added after the SOW closed) is internet-facing on `0.0.0.0/0` with `waf_web_acl_arn` unset — no WAF. Flagged as the one item worth acting on soon.
+
+## See also
+
+- `docs/waf/waf-sow-closeout.md` — SOW acceptance criteria mapped to delivery status, sign-off block
+- `docs/waf/waf-verification-record.md` — the four post-deployment verifications with verbatim AWS CLI output
+- `docs/waf/waf-design-decisions.md` — 12 ADRs; D6 covers the Bot Control deferral rationale
+- `docs/waf/waf-traffic-baseline.md` — the doc that still needs filling in
+- `.kiro/journal/2026-06-26-aheeva-cluster-migration-plan.md` — CTI v7 cluster workstream that introduced `webapps-alb`, the ALB now missing a WAF
+- PRs #29, #30, #31
