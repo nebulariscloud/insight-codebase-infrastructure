@@ -64,6 +64,28 @@ This review (2026-08-06, ~7 weeks after delivery) found that none of the four ha
   - Blocked on the *business* input, not engineering: what PCI workload is going in, and what hostname does it answer on. PCI DSS requires TLS in transit for cardholder data, so HTTP-only is not a valid interim. The `pci-alb-waf` Web ACL is already written and tuned in `custom-stacks/pci-alb.yaml` (`AWSManagedRulesSQLiRuleSet` + `AWSManagedRulesLinuxRuleSet`, rate limit 500/5min/IP vs 2000 elsewhere) and ships automatically once the block is enabled.
   - Values to paste in when it is time: `VpcId: vpc-0766c6bceb81ea3fa`, `PublicSubnetA: subnet-04e4afbc43dccc28a`, `PublicSubnetB: subnet-084f64c332115bbd8`, `AccessLogsBucketName: aws-accelerator-elb-access-logs-247514667218-us-east-2`, `CertificateArn: <issue in PCI account first>`.
 
+## PR status
+
+| PR | Branch | State | Waiting on |
+|---|---|---|---|
+| **#59** | `fix/waf-monitoring-namespace` | Open, pushed | Review + merge. Applying restores all WAF alarms. Merge this first. |
+| **#60** | `feat/waf-crm-osticket` | Open, pushed | Review + merge. Creates the two missing Web ACLs. |
+| — | `feat/waf-logs-monitoring-lists` | **Committed locally at `1da3ff3`, deliberately NOT pushed** | #60 being *applied*. `waf-logs` resolves Web ACL ARNs by name at plan time, so pushing before `crm-alb-waf` exists produces a failing plan (`WAFNonexistentItemException`). |
+
+Push PR 3 once #60 has applied:
+
+```bash
+git push -u insight-remote feat/waf-logs-monitoring-lists
+gh pr create --base main --head feat/waf-logs-monitoring-lists \
+  --repo nebulariscloud/insight-codebase-infrastructure \
+  --title "feat(waf): logging + alarms for all four perimeter Web ACLs" \
+  --body-file /tmp/waf-pr3-body.md
+```
+
+Collision check done: PR #57 (`osticket-hostname`) also touches `osticket-alb/` but only `README.md` / `example.tfvars` / `terraform.tfvars`, whereas #60 touches `main.tf` / `variables.tf`. No overlap; both report `MERGEABLE`.
+
+Note: this journal file is carried by PR #59, so it only exists on that branch until #59 merges to `main`.
+
 ## Activity log
 
 - **2026-08-06 ??:??** — Audited the whole monitoring module against the AWS WAF metrics doc instead of assuming. Dimensions and metric names all check out; namespace was the sole defect. But the doc's "Reporting criteria: There is a nonzero value" line exposed a second flaw in the liveness alarm I'd just written — at `period = 300` it would flap on sparse traffic (scriptcase-lb: 20 req/3h). Moved liveness to `period = 3600`, default 3 periods, with a `>= 2` validation guard. All five leaves/modules validate; `fmt -check -recursive` clean across `terraform/`. Gave user the 3-PR git sequence. Answered "is everything good" honestly: code is correct and validated but **nothing is merged or applied**, and V3-R is unproven until it is.
