@@ -289,15 +289,35 @@ How to read it:
 
 - **`Codes` non-empty** → this is a `dd`-procedure box, not a `copy-image` box. Stop and
   reroute.
-- **`Platform: windows`** → this is a **Windows** box, which changes a lot: the FTPS
-  server is IIS or FileZilla rather than vsftpd/proftpd, the Part 3 passive-range edit
-  is an entirely different procedure, admin access is SSM/RDP rather than SSH, and the
-  AMI carries Windows licensing. The `3389` rule in the source security group is the
-  hint that this is likely. Settle it before writing any in-box config steps.
+- **`Platform: windows`** → Windows box. **This is the case for WS Aheeva** — confirmed
+  2026-08-07: `Codes: []`, `Platform: windows`, `PlatformDetails: Windows` (so License
+  Included, not BYOL), root `/dev/sda1`, one volume. Consequences are in Part 3 and the
+  leaf README: IIS FTP or FileZilla rather than vsftpd, Windows Firewall as a second
+  invisible firewall, SSM port forwarding instead of SSH, and no `get-password-data`
+  because the image is not Sysprepped — the existing Windows credentials come across
+  and are the only way in.
 - **More than one `BDMs` entry** → secondary volumes exist. `copy-image` carries them;
   the old `register-image` path would have silently dropped them.
 
 ### 2.1 Create AMI from source (source tenant, at cutover after draining queue)
+
+> **`--no-reboot` on Windows is a rehearsal-only shortcut.** It skips filesystem
+> quiescing, so the image is crash-consistent — on NTFS that can mean a `chkdsk` on
+> first boot and, worse, an FTPS server caught mid-write to a file a client was
+> uploading. Fine for the throwaway AMI you use to prove the chain works.
+>
+> For the **final cutover AMI**, after client sends are paused and the queue is drained,
+> get a clean image instead: stop the FTP service so it flushes, then stop the instance,
+> then `create-image` **without** `--no-reboot`. It costs a few minutes of downtime you
+> have already budgeted for in the cutover window, and it removes a whole class of
+> "why is this file truncated" investigation.
+> ```powershell
+> Stop-Service ftpsvc      # or 'FileZilla Server'
+> ```
+> ```bash
+> aws ec2 stop-instances --region us-east-1 --instance-ids i-025bede8c30dbcece
+> aws ec2 wait instance-stopped --region us-east-1 --instance-ids i-025bede8c30dbcece
+> ```
 
 ```bash
 WS_AMI=$(aws ec2 create-image --region us-east-1 --instance-id i-025bede8c30dbcece \
@@ -393,12 +413,90 @@ aws ec2 describe-images --region us-east-2 --image-ids $WS_DEST_AMI \
 
 ## PART 3 — narrow the FTPS passive range (on WS Aheeva, before NLB apply)
 
-SSH into WS Aheeva (after it's deployed in Part 4, or on the source before cutover),
-edit the FTPS server config so passive ports = a small range that matches the leaf:
-- vsftpd: `pasv_min_port=40000` / `pasv_max_port=40019` + `pasv_address=<NLB public IP>`
-- proftpd: `PassivePorts 40000 40019` + `MasqueradeAddress <NLB public IP>`
-- pure-ftpd: `-p 40000:40019` + `-P <NLB public IP>`
-Restart the FTPS service. The `pasv_address`/masquerade = the NLB public IP (from Part 5).
+**WS Aheeva is a Windows box** (confirmed 2026-08-07: `Platform: windows`). So the FTPS
+server is IIS FTP or FileZilla Server, not vsftpd. Get in over SSM — no need to open
+3389:
+
+```bash
+aws ssm start-session --region us-east-2 --target <instance-id> \
+  --document-name AWS-StartPortForwardingSession \
+  --parameters '{"portNumber":["3389"],"localPortNumber":["13389"]}'
+# then RDP to localhost:13389
+```
+
+Identify which server it is first:
+
+```powershell
+Get-Service ftpsvc, 'FileZilla Server' -ErrorAction SilentlyContinue |
+  Select-Object Name, Status
+Get-NetTCPConnection -LocalPort 990 -State Listen |
+  Select-Object OwningProcess |
+  ForEach-Object { Get-Process -Id $_.OwningProcess | Select-Object Name, Path }
+```
+
+### If IIS FTP (`ftpsvc`)
+
+The data channel port range is a **server-wide** setting, not per-site, and it lives in
+`applicationHost.config` under `<system.ftpServer><firewallSupport>`:
+
+```powershell
+Import-Module WebAdministration
+
+# Passive range - must match both Terraform leaves (40000-40019)
+Set-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' `
+  -Filter 'system.ftpServer/firewallSupport' -Name 'lowDataChannelPort'  -Value 40000
+Set-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' `
+  -Filter 'system.ftpServer/firewallSupport' -Name 'highDataChannelPort' -Value 40019
+
+# External IP the server advertises in PASV replies = the NLB public IP (Part 5).
+# Without this the server hands out its own private 10.12.1.66 and every client's
+# data connection fails.
+Set-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' `
+  -Filter 'system.ftpServer/firewallSupport' -Name 'externalIp4Address' -Value '<NLB public IP>'
+
+# The range change requires a service restart, not just an IIS reset
+Restart-Service ftpsvc
+```
+
+> Two IIS-specific traps. **(1)** A per-site `ftpServer/firewallSupport` override can
+> shadow the server-level value — check the site as well as the machine level. **(2)**
+> IIS FTP has its own **IPv4 Address and Domain Restrictions** feature. If the site uses
+> it to allowlist client IPs, those rules stop matching after migration because the NLB
+> SNATs and traffic arrives from `10.0.0.0/20`. Same for `userIsolation` paths that
+> reference the old hostname.
+
+### If FileZilla Server
+
+GUI: Settings → Passive mode settings → *Use custom port range* `40000`-`40019`, and
+*Use the following IP* = the NLB public IP. Then restart the service. The equivalent
+lives in `FileZilla Server.xml` if you prefer editing the file, but restart the service
+either way.
+
+### Then, whichever it is — Windows Firewall
+
+The security group is not the only firewall. Check that 990 and `40000-40019` are open
+inbound in Windows Firewall **and** that no rule is scoped to the clients' public IPs,
+because after migration traffic arrives from NLB private addresses:
+
+```powershell
+New-NetFirewallRule -DisplayName 'FTPS control 990' -Direction Inbound `
+  -Protocol TCP -LocalPort 990 -RemoteAddress 10.0.0.0/20 -Action Allow
+New-NetFirewallRule -DisplayName 'FTPS passive 40000-40019' -Direction Inbound `
+  -Protocol TCP -LocalPort 40000-40019 -RemoteAddress 10.0.0.0/20 -Action Allow
+
+# Find pre-existing rules still scoped to client public IPs - these will not match
+Get-NetFirewallRule -DisplayName '*FTP*' | ForEach-Object {
+  [pscustomobject]@{
+    Rule   = $_.DisplayName
+    Remote = ($_ | Get-NetFirewallAddressFilter).RemoteAddress -join ','
+    Ports  = ($_ | Get-NetFirewallPortFilter).LocalPort -join ','
+  }
+}
+```
+
+**Also update anything inside the box that references the old address.** The source
+private IP was `172.30.2.200`; the new one is `10.12.1.66`. Same class of problem as
+CTI v7's `externip`, and just as easy to miss.
 
 ---
 
