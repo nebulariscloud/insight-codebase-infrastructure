@@ -17,7 +17,14 @@ Operational and project docs for the AWS WAF deployment. Written for the SOW del
 |---|---|---|
 | `waf-design-decisions.md` | Engineering, audit, future maintainers | Why each design choice was made and what alternatives were considered. The "what we did and why" record. |
 | `waf-verification-record.md` | Audit, SOW acceptance | Post-deployment verification: exact AWS CLI calls and observed responses, with pass criteria. Includes a retraction where a June conclusion proved wrong. |
-| `waf-sow-closeout.md` | Insight Group + Nebularis | **Start here for SOW status.** Acceptance criteria mapped to deliverables, the four remaining items with how to close each, a completion checklist, and the sign-off block. Revised 2026-08-10. |
+| `waf-sow-closeout.md` | Insight Group + Nebularis | SOW status and reasoning. Acceptance criteria mapped to deliverables, the four remaining items, and the sign-off block. Revised 2026-08-10. |
+| `waf-finish-checklist.md` | Whoever is finishing the work | **The execution doc.** Every remaining step in order with copy-paste commands. Start here if you want to close the SOW. |
+
+## → To finish the SOW, use `waf-finish-checklist.md`
+
+That is the execution doc: every remaining step in order, with the exact commands to paste. Steps marked **[HUMAN]** are conversations or sessions with nothing to run. 35 checkboxes, work top to bottom.
+
+Use `waf-sow-closeout.md` for **status and reasoning**. Use `waf-finish-checklist.md` to **get it done**.
 
 ## Current SOW status
 
