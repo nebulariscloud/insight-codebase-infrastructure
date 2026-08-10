@@ -76,6 +76,7 @@ module "alb" {
   health_check_matcher = var.health_check_matcher
 
   certificate_arn = var.enable_https ? aws_acm_certificate.osticket.arn : ""
+  enable_waf      = true
   waf_web_acl_arn = module.waf.web_acl_arn
 
   # Backend is cross-VPC over TGW; disable cross-zone to avoid extra cross-AZ

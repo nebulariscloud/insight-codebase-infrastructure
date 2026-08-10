@@ -24,6 +24,9 @@
 #     target_protocol = "HTTP"
 #     target_type     = "ip"
 #
+#     # Both are required. enable_waf drives count (must be known at plan
+#     # time); waf_web_acl_arn is resolved at apply.
+#     enable_waf      = true
 #     waf_web_acl_arn = module.waf.web_acl_arn
 #   }
 #
