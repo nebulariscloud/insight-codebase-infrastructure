@@ -49,15 +49,16 @@ Supporting material for the remaining items:
 
 **Closed 2026-08-10:**
 
-- Logging enrolled for `crm-alb-waf` and `osticket-alb-waf` — **PR #69** merged and applied. `crm-alb-waf` confirmed delivering (0 → 1 objects).
-- Alarm inventory confirmed at **20**. The earlier six-alarm reading was stale.
-- Account-wide load balancer enumeration: **4 ALBs, all with a Web ACL, no `icc-alb`.** The orphaned state file does not correspond to a live unprotected endpoint.
+- **WAF logging on all four Web ACLs, confirmed delivering** — 28830 / 15502 / 1 / 4. **PR #69** merged and applied.
+- **Alarm inventory confirmed at 20.** The earlier six-alarm reading was stale.
+- **Account-wide load balancer enumeration: 4 ALBs, all with a Web ACL, no `icc-alb`.** The orphaned state file does not correspond to a live unprotected endpoint, and the ALB inventory is now known complete.
 
 **Nebularis to close — engineering, no client input, and no additional charge:**
 
-1. **`osticket-alb-waf` log delivery** — attached and identically configured to the one now proven working, but its ALB is idle so it has nothing to write. One request closes it. Checklist step 6c.
-2. **Dashboard visual confirmation** and **runbook exercise**. Checklist steps 1 and 2.
+1. **Dashboard visual confirmation** — checklist step 1. Last unverified item on SOW acceptance criterion 4.
+2. **Runbook exercise** — ~30 minutes, checklist step 2.
 3. **Remove the orphaned `icc-alb` state object** — state hygiene, not exposure. Checklist step 7.
+4. **osTicket HTTP 500** — not a WAF item, but found while closing the logging check. Probably an artefact of requesting the ALB by IP rather than hostname; unverified. Checklist step 8d, two commands.
 
 **Requires Insight Group:**
 

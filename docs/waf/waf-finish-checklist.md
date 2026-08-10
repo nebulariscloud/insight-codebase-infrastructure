@@ -13,20 +13,22 @@ Work top to bottom. Steps marked **[HUMAN]** are conversations or sessions with 
 | Step 3 | Bot Control decision | **Insight Group** |
 | Step 4 | Custom rules review | **Insight Group** (4 owner conversations) |
 | Step 5 | Two training sessions | Both |
-| Step 6 | Log delivery — **mostly done**, one `curl` left (6c) | Nebularis |
+| ~~Step 6~~ | ~~Log delivery + alarm inventory~~ | **DONE 2026-08-10** |
 | Step 7 | Orphaned `icc-alb` state — **security question closed**, cleanup left | Nebularis |
-| Step 8 | osTicket HTTPS | Insight Group's DNS admin, then Nebularis |
+| Step 8 | osTicket HTTPS, plus **8d: the HTTP 500** | Insight Group's DNS admin, then Nebularis |
 | Step 9 | crm / osticket baselines | Nebularis, after a week of data |
 
 Steps 6 and 7 were added after a wider verification round on 2026-08-10 found that two of the four Web ACLs had never delivered a log record, and that an orphaned state file claims 13 resources. Detail in `waf-verification-report.md`.
 
-**Progress as of 2026-08-10:**
+**Progress as of 2026-08-10 — everything with an unknown answer is now settled:**
 
-- PR **#69** merged and applied. `crm-alb-waf` logging confirmed working (0 → 1 objects). `osticket-alb-waf` still 0 — its ALB is idle; one `curl` closes it. **Step 6c.**
-- Alarm inventory confirmed: **20**. Step 6b done; the earlier six-alarm reading was stale.
-- Account-wide load balancer enumeration: **7 LBs, 4 ALBs, all four with a Web ACL, no `icc-alb`.** The orphaned state does not correspond to a live unprotected endpoint. Step 7 drops from "possible security exposure" to state cleanup.
+- **Step 6 complete.** PR **#69** merged and applied. All four Web ACLs delivering log records: 28830 / 15502 / 1 / 4. The SOW logging deliverable covers every protected resource.
+- **Alarm inventory: 20.** The earlier six-alarm reading was stale, from before #62's apply.
+- **Account-wide load balancer enumeration: 7 LBs, 4 ALBs, all four with a Web ACL, no `icc-alb`.** The orphaned state does not correspond to a live unprotected endpoint. Step 7 drops from "possible security exposure" to state cleanup.
+- **PRs #58, #69 and #70 all merged**; nothing open.
+- **New, unrelated:** osTicket returned HTTP **500** when reached by the ALB's raw DNS name. Probably an artefact of requesting by IP rather than by hostname, but unverified. **Step 8d.**
 
-> **Priority order if you only have twenty minutes:** step 6c (one `curl`, then wait 5 min), then step 1 (open the dashboard). Those are the only two places where we still do not know the answer. Step 7 is tidying. Steps 2–5 are scheduled work.
+> **Priority order:** step 8d (two commands — is the ticket portal actually working?), then step 1 (open the dashboard), then step 2 (the ~30 minute runbook exercise). Step 7 is tidying. Steps 3–5 need Insight Group.
 
 ---
 
@@ -44,20 +46,22 @@ Every command block below asserts the account before doing anything. Get this wr
 
 ## Step 0 — Merge the open PRs
 
-- [x] **PR #69** — `waf-logs`: enrol `crm-alb-waf` and `osticket-alb-waf` in logging. **Merged and applied 2026-08-10.** Plan read `2 to add, 0 to change, 0 to destroy`, as predicted; apply clean.
-- [ ] **PR #70** — this checklist, the verification report, closeout rev 3. Docs only.
-- [ ] **PR #58** — cti-v7 operations docs. Docs only.
+**All merged as of 2026-08-10. Nothing open.**
+
+- [x] **PR #69** — `waf-logs`: enrol `crm-alb-waf` and `osticket-alb-waf` in logging. Plan read `2 to add, 0 to change, 0 to destroy`, as predicted; apply clean.
+- [x] **PR #70** — verification report, closeout rev 3, checklist steps 6 and 7.
+- [x] **PR #58** — cti-v7 operations docs.
+
+Earlier in the sequence, listed so the numbering isn't confusing: **#67** (closeout
+rev 2), **#68** (training material, custom-rules template).
+
+Verified on `main` rather than trusted from the merge — #67 once merged at a stale
+head and silently dropped a file:
 
 ```bash
-R=nebulariscloud/insight-codebase-infrastructure
-gh pr merge 70 --repo "$R" --squash
-gh pr merge 58 --repo "$R" --squash
+git fetch insight-remote main
+git ls-tree --name-only insight-remote/main docs/waf/   # expect 12 files
 ```
-
-Both are docs-only, so `detect` yields `any=false` and nothing plans or applies.
-
-Already merged, listed so the numbering isn't confusing: **#67** (closeout rev 2),
-**#68** (training material, custom-rules template), **#69** (the logging fix).
 
 ---
 
@@ -422,7 +426,7 @@ done
 - [x] **PR #69 merged and applied — done 2026-08-10.** Plan read `2 to add, 0 to change, 0 to destroy`, as predicted. Apply clean.
 - [x] All four report `dest = arn:aws:s3:::aws-waf-logs-713939170920-us-east-2`
 - [x] `crm-alb-waf` above zero — moved 0 → 1
-- [ ] `osticket-alb-waf` above zero — **still 0.** See 6c.
+- [x] `osticket-alb-waf` above zero — **4 objects after 6c**
 
 Result after apply:
 
@@ -430,17 +434,20 @@ Result after apply:
 ingress-alb-waf      objects=28830
 scriptcase-lb-waf    objects=15502
 crm-alb-waf          objects=1     <- was 0
-osticket-alb-waf     objects=0
+osticket-alb-waf     objects=4     <- was 0, after the forced request in 6c
 ```
 
 `crm-alb-waf` going 0 → 1 is the signal that matters: it proves the logging
 config, bucket policy and KMS grant all work for a newly enrolled Web ACL.
 
-### 6c. Force one request through osTicket to close V9
+**Step 6 is complete. The SOW logging deliverable now covers all four protected
+resources.**
 
-`osticket-alb-waf` is attached and configured identically to `crm-alb-waf`. WAF
-writes an object only after inspecting a request, and that ALB has had none since
-the apply. Almost certainly idle, not broken — but confirm rather than assume.
+### 6c. Force one request through osTicket — **DONE 2026-08-10**
+
+`osticket-alb-waf` was attached and configured identically to `crm-alb-waf`, but
+WAF writes an object only after inspecting a request and that ALB had had none
+since the apply. Confirmed rather than assumed:
 
 ```bash
 # Plain HTTP: the cert is still PENDING_VALIDATION (step 8).
@@ -454,22 +461,23 @@ aws s3 ls \
   --recursive | wc -l
 ```
 
-- [ ] Count is 1 or more
+Result:
 
-Any HTTP status is fine — 200, 302, 404, even 503. The only thing being tested is
-that WAF inspected a request and wrote a record.
-
-If it is still 0 ten minutes after a confirmed request, it is a real fault. Next
-steps in that case:
-
-```bash
-arn=$(aws wafv2 list-web-acls --scope REGIONAL --region us-east-2 \
-  --query "WebACLs[?Name=='osticket-alb-waf'].ARN | [0]" --output text)
-aws wafv2 get-logging-configuration --resource-arn "$arn" --region us-east-2
+```
+http status: 500
+4
 ```
 
-**Then record the result in `waf-verification-record.md` under V9** and flip V9
-to Pass in both that file and `waf-verification-report.md`.
+- [x] Count is 1 or more — **4**
+
+Any HTTP status proves the point. 200, 302, 404 or 500 all mean WAF inspected the
+request and wrote a record, which is the only thing this step tests.
+
+V9 is recorded as Pass in `waf-verification-record.md` and
+`waf-verification-report.md`.
+
+**The `500` is a separate matter — see step 8d.** It is not a WAF result and does
+not affect this step, but it should not be ignored.
 
 ### 6b. Alarm inventory — **DONE 2026-08-10: 20 confirmed**
 
@@ -717,6 +725,56 @@ gh pr create --base main --head feat/osticket-enable-https \
 - [ ] `curl -I https://osticket.insightgrouppr.com/` returns a certificate and a 200/302
 - [ ] Point the hostname at the ALB DNS name if not already
 
+### 8d. osTicket returned HTTP 500 — is the portal actually healthy?
+
+Found on 2026-08-10 while closing step 6c. Requesting the ALB by its raw DNS name
+returned **500**.
+
+This is not a WAF problem and not a load balancer problem. The `osticket-alb`
+listener is a plain forward to `10.12.1.67:80` with no host-based routing rules
+and no fixed-response default action, so a 500 means a target answered and the
+application errored. An ALB with no healthy targets returns 503; a malformed
+target response returns 502.
+
+**Most likely a testing artefact, not a fault.** osTicket stores an absolute
+helpdesk URL in `ost-config.php` and commonly errors when reached on an
+unexpected hostname. The target group health check uses `/` with matcher
+`200,301,302` and sends the target IP as `Host`, so the target can be healthy
+while a wrong-`Host` request 500s. Consistent with what was seen — but unverified.
+
+```bash
+# Same request, correct hostname.
+curl -sS -o /dev/null -w 'correct Host: %{http_code}\n' \
+  -H 'Host: osticket.insightgrouppr.com' \
+  http://osticket-alb-343594101.us-east-2.elb.amazonaws.com/
+
+ACCT=$(aws sts get-caller-identity --query Account --output text)
+[ "$ACCT" != "713939170920" ] && { echo "WRONG ACCOUNT ($ACCT) — need Perimeter"; exit 1; }
+
+tg=$(aws elbv2 describe-target-groups --region us-east-2 \
+  --query "TargetGroups[?contains(TargetGroupName,'osticket')].TargetGroupArn | [0]" \
+  --output text)
+aws elbv2 describe-target-health --target-group-arn "$tg" --region us-east-2 \
+  --query 'TargetHealthDescriptions[].[Target.Id,Target.Port,TargetHealth.State,TargetHealth.Reason]' \
+  --output table
+```
+
+- [ ] Correct-`Host` request returns 200, 301 or 302
+- [ ] Target `10.12.1.67` reports `healthy`
+
+If both pass, the portal is fine and the 500 was an artefact of testing by IP —
+note it and move on.
+
+If the correct-`Host` request also 500s, or the target is unhealthy, it is a real
+osTicket fault and belongs to the migration workstream, not this checklist.
+Starting points: whether Apache/PHP is running on `10.12.1.67`, whether osTicket
+can reach `iccmaindb`, and the PHP error log. Cross-reference
+`.kiro/journal/2026-06-26-aheeva-cluster-migration-plan.md`, which covers the
+osTicket move off Lightsail.
+
+Worth settling before step 8c flips HTTPS on — no point publishing a TLS
+endpoint in front of an application returning 500.
+
 ---
 
 ## Step 9 — Baselines for crm and osticket (after ~1 week of traffic)
@@ -776,12 +834,18 @@ Then set per-ACL thresholds at roughly 1.5–2× observed peak in `terraform/liv
 
 ## Definition of done
 
-SOW is signable when **Steps 1–6** are complete.
+SOW is signable when **Steps 1–6** are complete. **Step 6 is done.**
 
-Step 6 is in that set because it is part of the SOW logging deliverable. It is now one `curl` away (6c).
+That leaves **step 1** (open the dashboard) and **step 2** (the runbook exercise) on the gating list — plus steps 3, 4 and 5, which need Insight Group.
 
 **Step 7 no longer gates sign-off.** It was in the gating set while it might have been an unprotected public load balancer. The account-wide enumeration ruled that out, so it is state cleanup — do it, but it does not hold up the SOW.
 
-Steps 8–10 are operational follow-ups. Step 8 is worth prioritising because a public ticket portal is currently served over plain HTTP, and that is a live exposure even though it is not a WAF defect.
+Steps 8–10 are operational follow-ups. Step 8 is worth prioritising anyway: the ticket portal is on plain HTTP, which is a live exposure even though it is not a WAF defect, and **8d may mean the portal is not working at all.**
 
-**Shortest path to signable:** step 6c (one request, wait 5 minutes), step 1 (open the dashboard), step 2 (the ~30 minute runbook exercise). Then the four items that need Insight Group: Bot Control, custom rules, and the two training sessions.
+**Shortest path to signable:**
+
+1. **Step 8d** — two commands. Is the ticket portal actually serving? Do this first; it is the only thing on the list that might be an active outage.
+2. **Step 1** — open the dashboard, confirm the widgets populate.
+3. **Step 2** — the ~30 minute runbook exercise.
+
+Then the four Insight Group items: Bot Control, custom rules, and the two training sessions.
