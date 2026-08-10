@@ -31,11 +31,44 @@ on:
       leaf:
         description: "Specific leaf path (e.g. terraform/live/perimeter/scriptcase-lb). Empty = all live leaves."
         required: false
+      apply:
+        description: "Actually APPLY the leaf, not just plan. Requires 'leaf' to be set. Still gated by the production environment."
+        required: false
+        type: boolean
+        default: false
+      allow_destroy:
+        description: "Authorise deletions/replacements for this dispatch only. Leave off unless the plan's destroys are expected."
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   id-token: write     # required for OIDC
   contents: read
   pull-requests: write
+
+###############################################################################
+# Serialize everything that can touch state.
+#
+# On 2026-08-10 two module PRs (#65 and #62) were merged close together. Both
+# fan out to all ~23 leaves, so the two runs overlapped: #62's plan held the
+# DynamoDB lock on live/production/insight-ubuntu-prod while #65's apply tried
+# to take it, and that apply failed with:
+#
+#   Error acquiring the state lock ... ConditionalCheckFailedException
+#   Lock Info: Operation: OperationTypePlan
+#
+# Cancelling one run mid-flight then risks orphaning locks and leaves half the
+# leaves unapplied — which is exactly what happened (waf-monitoring never got
+# its thresholds).
+#
+# One global group, cancel-in-progress deliberately FALSE: an apply must never
+# be killed part-way through, and a queued run carries changes that still need
+# to land. Runs queue instead.
+###############################################################################
+concurrency:
+  group: terraform-state
+  cancel-in-progress: false
 
 env:
   TF_VERSION: "1.9.5"
@@ -92,6 +125,41 @@ jobs:
               | grep -v '^terraform/live/_template/' \
               | awk -F/ '{ print $1"/"$2"/"$3"/"$4 }' \
               | sort -u)
+          fi
+
+          #####################################################################
+          # Drop any leaf carrying a `.tf-skip` file.
+          #
+          # A module change fans out to EVERY leaf, so one leaf that cannot plan
+          # turns every subsequent module PR red. cti-v7 has done exactly that
+          # since 2026-08-08: its instance was destroyed, its public_subnet_id is
+          # stale, and it now fails `RunInstances` with InvalidSubnetID.NotFound
+          # on every single run. It cannot be fixed forward yet either — the
+          # rebuild is blocked on an Aheeva license hostid question and a missing
+          # VPC Block Public Access exclusion.
+          #
+          # A permanently-red pipeline is worse than a parked leaf: it trains
+          # people to ignore failures, which is how the original cti-v7
+          # destruction went unnoticed in the first place.
+          #
+          # `.tf-skip` parks a leaf explicitly and visibly. Its first line should
+          # say why and what unblocks it. Delete the file to bring the leaf back.
+          # This only affects CI — state and resources are untouched.
+          #####################################################################
+          if [[ ${#leaves[@]} -gt 0 ]]; then
+            kept=()
+            for leaf in "${leaves[@]}"; do
+              if [[ -f "${leaf}/.tf-skip" ]]; then
+                reason=$(head -1 "${leaf}/.tf-skip" 2>/dev/null || echo "no reason given")
+                echo "::notice title=Skipping ${leaf}::.tf-skip present — ${reason}"
+              else
+                kept+=("${leaf}")
+              fi
+            done
+            leaves=()
+            if [[ ${#kept[@]} -gt 0 ]]; then
+              leaves=("${kept[@]}")
+            fi
           fi
 
           if [[ ${#leaves[@]} -eq 0 ]]; then
@@ -277,9 +345,28 @@ jobs:
   ###########################################################################
   # 3. Apply on push to main, gated by the "production" environment
   ###########################################################################
+  # Runs on push to main, and on a manual dispatch that explicitly opts in.
+  #
+  # WHY DISPATCH-APPLY EXISTS: when an apply fails or is cancelled, the leaf is
+  # left with pending drift and there was previously NO way to re-drive it —
+  # dispatch could only plan. The workaround was a dummy commit touching the
+  # leaf, which was needed twice on 2026-08-10 (osticket-alb's cert, and
+  # waf-monitoring's thresholds after a cancelled run). That is a bad pattern:
+  # it pollutes history and tempts people into "just one more no-op push".
+  #
+  # Guardrails kept: `leaf` must be named (no blanket dispatch-apply across the
+  # estate), the production environment gate still applies, and the destroy
+  # guard still runs.
   apply:
     needs: [detect, plan]
-    if: github.event_name == 'push' && needs.detect.outputs.any == 'true'
+    if: >
+      needs.detect.outputs.any == 'true' &&
+      (
+        github.event_name == 'push' ||
+        (github.event_name == 'workflow_dispatch' &&
+         inputs.apply &&
+         inputs.leaf != '')
+      )
     runs-on: ubuntu-latest
     environment: production    # set required reviewers on this env in repo settings
     strategy:
@@ -365,6 +452,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           SHA: ${{ github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_ALLOW_DESTROY: ${{ inputs.allow_destroy }}
         run: |
           set -euo pipefail
 
@@ -403,6 +492,13 @@ jobs:
             echo "Destroy guard: resolved PR #${PR_NUM}; labels: ${PR_LABELS:-<none>}"
           else
             echo "Destroy guard: could not resolve a PR for ${SHA} (direct push?). Falling back to the commit message only."
+          fi
+
+          # Explicit opt-in on a manual dispatch. Only honoured for
+          # workflow_dispatch, so it cannot be set for a push.
+          if [[ "${EVENT_NAME}" == "workflow_dispatch" && "${DISPATCH_ALLOW_DESTROY}" == "true" ]]; then
+            echo "Destroy guard: allow_destroy input set on this manual dispatch. Proceeding."
+            exit 0
           fi
 
           # Blanket per-PR escape hatch via label.
