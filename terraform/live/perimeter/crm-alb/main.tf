@@ -70,6 +70,7 @@ module "alb" {
   health_check_matcher = var.health_check_matcher
 
   certificate_arn = var.enable_https ? aws_acm_certificate.icc.arn : ""
+  enable_waf      = true
   waf_web_acl_arn = module.waf.web_acl_arn
 
   # Backends are cross-VPC over TGW; disable cross-zone to avoid extra

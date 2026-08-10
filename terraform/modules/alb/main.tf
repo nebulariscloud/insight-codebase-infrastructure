@@ -163,10 +163,36 @@ resource "aws_lb_listener" "https" {
 
 ###############################################################################
 # Optional WAF association
+#
+# count is driven by var.enable_waf (a plain bool, always known at plan time)
+# and NOT by inspecting var.waf_web_acl_arn.
+#
+# WHY: the original version used `count = var.waf_web_acl_arn == "" ? 0 : 1`.
+# That works only when the ARN comes from tfvars. The moment a caller wires it
+# to a Web ACL created in the same apply — the documented pattern in
+# live/_template/main.tf, `waf_web_acl_arn = module.waf.web_acl_arn` — the ARN
+# is unknown at plan time and Terraform cannot evaluate count:
+#
+#   Error: Invalid count argument
+#   The "count" value depends on resource attributes that cannot be determined
+#   until apply, so Terraform cannot predict how many instances will be created.
+#
+# That broke the plan for crm-alb and osticket-alb in PR #60 (2026-08-10).
+# A bool separates "should this exist" (known now) from "what is its value"
+# (resolved at apply), which is the standard shape for this.
 ###############################################################################
 
 resource "aws_wafv2_web_acl_association" "this" {
-  count        = var.waf_web_acl_arn == "" ? 0 : 1
+  count        = var.enable_waf ? 1 : 0
   resource_arn = aws_lb.this.arn
   web_acl_arn  = var.waf_web_acl_arn
+
+  lifecycle {
+    # Catches enable_waf = true with no ARN supplied. Deferred to apply when the
+    # ARN is unknown at plan time, which is the normal case.
+    precondition {
+      condition     = var.waf_web_acl_arn != ""
+      error_message = "enable_waf is true but waf_web_acl_arn is empty. Pass the Web ACL ARN, e.g. waf_web_acl_arn = module.waf.web_acl_arn."
+    }
+  }
 }
