@@ -24,16 +24,25 @@ variable "region" {
   default     = "us-east-2"
 }
 
-variable "ingress_web_acl_name" {
-  description = "Name of the LZA-managed Web ACL fronting the IngressALB. Used to look up the ARN."
-  type        = string
-  default     = "ingress-alb-waf"
-}
+variable "web_acl_names" {
+  description = <<-EOT
+    Names of every REGIONAL Web ACL in this account that should log to the
+    bucket this leaf creates. One aws_wafv2_web_acl_logging_configuration is
+    created per name. Ownership of the Web ACL itself is irrelevant here -
+    CFN-managed (LZA) and Terraform-managed Web ACLs are both fine, because
+    the logging configuration is a separate AWS resource.
 
-variable "scriptcase_web_acl_name" {
-  description = "Name of the LZA-managed Web ACL fronting the Scriptcase ALB."
-  type        = string
-  default     = "scriptcase-lb-waf"
+    Keep this list in sync with the Web ACLs that actually exist. A Web ACL
+    absent from this list silently gets no logging - that is exactly how
+    crm-alb-waf and osticket-alb-waf went unlogged after they were created.
+    The cross-check is `waf-finish-checklist.md` step 6.
+  EOT
+  type        = list(string)
+
+  validation {
+    condition     = length(var.web_acl_names) > 0
+    error_message = "web_acl_names must list at least one Web ACL."
+  }
 }
 
 variable "log_retention_days" {
