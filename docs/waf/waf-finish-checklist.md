@@ -4,7 +4,23 @@ Everything still required to close the SOW, in order, with the exact commands.
 
 Work top to bottom. Steps marked **[HUMAN]** are conversations or sessions with no command to run. Everything else is copy-paste.
 
-Status as of 2026-08-10: implementation is complete and verified. Four SOW items and one verification remain.
+**Status as of 2026-08-10.** The filtering layer is deployed and verified on all four internet-facing applications. Remaining:
+
+| | Item | Who |
+|---|---|---|
+| Step 1 | Dashboard visual confirmation | Nebularis |
+| Step 2 | Runbook exercise | Nebularis |
+| Step 3 | Bot Control decision | **Insight Group** |
+| Step 4 | Custom rules review | **Insight Group** (4 owner conversations) |
+| Step 5 | Two training sessions | Both |
+| **Step 6** | **Log delivery for all 4 Web ACLs + alarm inventory** | **Nebularis — closes closeout rev 3 findings 1 and 3** |
+| **Step 7** | **Orphaned `icc-alb` state — possible unprotected public ALB** | **Nebularis — closes closeout rev 3 finding 2** |
+| Step 8 | osTicket HTTPS | Insight Group's DNS admin, then Nebularis |
+| Step 9 | crm / osticket baselines | Nebularis, after a week of data |
+
+Steps 6 and 7 were added after a wider verification round on 2026-08-10 found that two of the four Web ACLs had never delivered a log record, and that an orphaned state file claims 13 live resources. Detail in `waf-verification-report.md`.
+
+> **Priority order if you only have an hour:** step 6, then step 7, then step 1. Those three are the ones where we currently do not know the answer. Everything else is a scheduled conversation or a known quantity.
 
 ---
 
@@ -20,17 +36,31 @@ Every command block below asserts the account before doing anything. Get this wr
 
 ---
 
-## Step 0 — Merge the two open docs PRs
+## Step 0 — Merge the open PRs
 
-- [ ] **PR #67** — SOW closeout revision
-- [ ] **PR #58** — cti-v7 operations docs
+**#69 is the only one that plans or applies.** Merge it first so its apply has
+finished before you run step 6.
 
-Docs only. `detect` yields `any=false`, so nothing plans or applies.
+- [ ] **PR #69** — `waf-logs`: enrol `crm-alb-waf` and `osticket-alb-waf` in logging. **Plans and applies.** Expected plan: `2 to add, 0 to change, 0 to destroy`. Read the plan comment before merging; if it shows any destroy or replace, stop.
+- [ ] **PR #70** — this checklist revision, the verification report, closeout rev 3. Docs only.
+- [ ] **PR #58** — cti-v7 operations docs. Docs only.
 
 ```bash
-gh pr merge 67 --repo nebulariscloud/insight-codebase-infrastructure --squash
-gh pr merge 58 --repo nebulariscloud/insight-codebase-infrastructure --squash
+R=nebulariscloud/insight-codebase-infrastructure
+
+# Read #69's plan comment first.
+gh pr view 69 --repo "$R" --comments | tail -60
+
+gh pr merge 69 --repo "$R" --squash
+gh pr merge 70 --repo "$R" --squash
+gh pr merge 58 --repo "$R" --squash
 ```
+
+Docs-only PRs yield `any=false` from `detect`, so nothing plans or applies for
+those two.
+
+Already merged, listed so the numbering isn't confusing: **#67** (closeout rev 2)
+and **#68** (training material, custom-rules template).
 
 ---
 
@@ -365,9 +395,191 @@ Cover: rule evaluation order; the Count-then-promote discipline; the false-posit
 
 ---
 
-## Step 6 — osTicket HTTPS (not an SOW blocker, but the portal is on plain HTTP)
+## Step 6 — Verify log delivery for all four Web ACLs, and confirm the alarm inventory
 
-### 6a. Get the validation CNAME
+Both of these close findings from closeout rev 3. Neither is optional.
+
+### 6a. Log delivery — every Web ACL must be above zero
+
+Verified 2026-08-10: **two of four were at zero.** `crm-alb-waf` and
+`osticket-alb-waf` had never delivered a WAF log record, because the `waf-logs`
+leaf hard-coded two Web ACL variables with no way to express a third. **PR #69**
+fixes that. Merge it, let CI apply, wait ~5 minutes, then run this.
+
+```bash
+ACCT=$(aws sts get-caller-identity --query Account --output text)
+[ "$ACCT" != "713939170920" ] && { echo "WRONG ACCOUNT ($ACCT) — need Perimeter"; exit 1; }
+
+for acl in ingress-alb-waf scriptcase-lb-waf crm-alb-waf osticket-alb-waf; do
+  arn=$(aws wafv2 list-web-acls --scope REGIONAL --region us-east-2 \
+    --query "WebACLs[?Name=='$acl'].ARN | [0]" --output text)
+  dest=$(aws wafv2 get-logging-configuration --resource-arn "$arn" --region us-east-2 \
+    --query 'LoggingConfiguration.LogDestinationConfigs[0]' --output text 2>/dev/null || echo NONE)
+  n=$(aws s3 ls \
+    "s3://aws-waf-logs-713939170920-us-east-2/AWSLogs/713939170920/WAFLogs/us-east-2/$acl/" \
+    --recursive 2>/dev/null | wc -l | tr -d ' ')
+  printf "%-20s dest=%-50s objects=%s\n" "$acl" "$dest" "$n"
+done
+```
+
+- [ ] **PR #69 merged and applied.** Plan should read `2 to add, 0 to change, 0 to destroy`. If it shows a destroy or replace, stop and re-read the PR body — no `ALLOW-DESTROY` is expected for this change.
+- [ ] All four report `dest = arn:aws:s3:::aws-waf-logs-713939170920-us-east-2`
+- [ ] All four report `objects` > 0
+
+`crm-alb-waf` and `osticket-alb-waf` may sit at 0 for a few minutes if their ALBs
+are idle. Generate a request against each and re-run before concluding anything.
+
+**Then record the result in `waf-verification-record.md` under V9** and flip V9
+from FAIL to Pass in both that file and `waf-verification-report.md`.
+
+### 6b. Alarm inventory — 20 expected, currently unconfirmed
+
+PR #62 expanded the alarm set from 6 to 20. Internal notes record that as
+verified; a later capture showed only the original 6 names. The two records
+cannot be reconciled, so V8 is recorded as **not verified**. Settle it:
+
+```bash
+ACCT=$(aws sts get-caller-identity --query Account --output text)
+[ "$ACCT" != "713939170920" ] && { echo "WRONG ACCOUNT ($ACCT) — need Perimeter"; exit 1; }
+
+echo "alarm count: $(aws cloudwatch describe-alarms \
+  --alarm-name-prefix perimeter-waf- --region us-east-2 \
+  --query 'length(MetricAlarms)' --output text)   (expected 20)"
+
+aws cloudwatch describe-alarms --alarm-name-prefix perimeter-waf- \
+  --region us-east-2 \
+  --query 'sort_by(MetricAlarms,&AlarmName)[].[AlarmName,StateValue,Namespace,Threshold]' \
+  --output table
+```
+
+- [ ] Count is **20** (5 per Web ACL × 4)
+- [ ] Every `Namespace` reads `AWS/WAFV2` — capital `V`, this is the June defect
+- [ ] All four `*-no-metrics` liveness alarms present and `OK`. `OK` here is the meaningful signal: they alarm on *absence*, so `OK` positively confirms metrics are arriving
+- [ ] Thresholds match the baseline: ingress 4000 / 700 / 600 / 100 · scriptcase 600 / 400 / 250 / 100 · crm + osticket on module defaults 600 / 400 / 300 / 100
+
+If the count comes back **6**, the `waf-monitoring` leaf never applied. Its
+original apply was cancelled and re-driven by dispatch; re-drive it again:
+
+```bash
+gh workflow run terraform.yml \
+  --repo nebulariscloud/insight-codebase-infrastructure \
+  -f leaf=terraform/live/perimeter/waf-monitoring \
+  -f apply=true
+```
+
+- [ ] If re-driven: re-run the inventory command above and confirm 20
+
+**Then record the outcome in `waf-verification-record.md` under V8** and update
+V8 in `waf-verification-report.md`.
+
+---
+
+## Step 7 — Resolve the orphaned `icc-alb` state (possible unprotected public ALB)
+
+**Do this before signing off on acceptance criterion 1.** Step 1 concluded "4 of
+4 ALBs protected"; that is only as good as the list of ALBs it was checked
+against.
+
+`crm-alb` was renamed from `icc-alb` in PR #45. The old state object was never
+removed and still claims **13 live resources**:
+
+```
+s3://lza-terraform-state-547368325532/live/perimeter/icc-alb/terraform.tfstate
+serial 2 · lineage 4d7fafc8-9e41-1cdf-d9e3-14c241ab8901 · modified 2026-07-17
+
+aws_lb.this · aws_security_group.alb · aws_acm_certificate.icc
+aws_lb_target_group.{this,dev} · aws_lb_target_group_attachment.{prod,dev}
+aws_lb_listener.http · aws_lb_listener_rule.{prod_host,dev_host}
+aws_vpc_security_group_{ingress_rule.http,ingress_rule.https,egress_rule.to_targets}
+```
+
+No leaf on `main` points at it. Two possibilities:
+
+| | Scenario | Implication |
+|---|---|---|
+| **(a)** | Same resources `crm-alb` now manages | Dual-management hazard. No extra cost or exposure. |
+| **(b)** | A separate `icc-alb` ALB is still running | Internet-facing, outside the WAF programme, unmonitored, billing. |
+
+### 7a. Which one is it
+
+```bash
+ACCT=$(aws sts get-caller-identity --query Account --output text)
+[ "$ACCT" != "713939170920" ] && { echo "WRONG ACCOUNT ($ACCT) — need Perimeter"; exit 1; }
+
+echo "=== every load balancer AWS knows about ==="
+aws elbv2 describe-load-balancers --region us-east-2 \
+  --query 'LoadBalancers[].[LoadBalancerName,Scheme,Type,DNSName]' --output table
+
+echo "=== and their WAF status ==="
+aws elbv2 describe-load-balancers --region us-east-2 \
+  --query 'LoadBalancers[?Type==`application`].LoadBalancerArn' --output text \
+  | tr '\t' '\n' | while read -r arn; do
+      [ -z "$arn" ] && continue
+      acl=$(aws wafv2 get-web-acl-for-resource --resource-arn "$arn" --region us-east-2 \
+        --query 'WebACL.Name' --output text 2>/dev/null || echo "NONE")
+      printf "%-70s WAF=%s\n" "${arn##*/loadbalancer/}" "$acl"
+    done
+```
+
+Then, with credentials that can read the SharedServices state bucket:
+
+```bash
+ACCT=$(aws sts get-caller-identity --query Account --output text)
+[ "$ACCT" != "547368325532" ] && { echo "WRONG ACCOUNT ($ACCT) — need SharedServices"; exit 1; }
+
+aws s3 cp s3://lza-terraform-state-547368325532/live/perimeter/icc-alb/terraform.tfstate - \
+  --region us-east-2 \
+  | jq -r '.resources[] | select(.type=="aws_lb") | .instances[].attributes | "\(.name)  \(.arn)  \(.dns_name)"'
+```
+
+- [ ] Recorded the ALB name / ARN / DNS name from the orphaned state
+- [ ] Compared against the live load balancer list
+
+### 7b. Act on the answer
+
+**Scenario (a)** — the ARN belongs to the ALB now named `crm-alb`, and no extra
+load balancer exists. Nothing is running unprotected. Remove the stale state so
+two states can never fight over one set of resources:
+
+```bash
+ACCT=$(aws sts get-caller-identity --query Account --output text)
+[ "$ACCT" != "547368325532" ] && { echo "WRONG ACCOUNT ($ACCT) — need SharedServices"; exit 1; }
+
+# Keep a copy first. This is the only record of those resource addresses.
+aws s3 cp s3://lza-terraform-state-547368325532/live/perimeter/icc-alb/terraform.tfstate \
+  ./icc-alb-orphan-state-backup.json --region us-east-2
+
+# Then remove the object and its lock-table digest item.
+aws s3 rm s3://lza-terraform-state-547368325532/live/perimeter/icc-alb/terraform.tfstate \
+  --region us-east-2
+aws dynamodb delete-item --table-name lza-terraform-locks --region us-east-2 \
+  --key '{"LockID":{"S":"lza-terraform-state-547368325532/live/perimeter/icc-alb/terraform.tfstate-md5"}}'
+```
+
+Deleting a state object is irreversible and the bucket may or may not be
+versioned — **take the backup first, and confirm the ARN comparison before
+running the removal.**
+
+- [ ] Backup taken
+- [ ] State object and lock digest removed
+
+**Scenario (b)** — an extra load balancer exists. That is a public endpoint
+outside the WAF programme.
+
+- [ ] Confirm what it serves and whether any DNS record still points at it
+- [ ] If dead: decommission through the normal PR flow — recreate a minimal `icc-alb` leaf pointing at the existing state, then apply a destroy with explicit `ALLOW-DESTROY` authorisation. Do **not** delete it out of band; that leaves the same orphaned-state problem behind.
+- [ ] If live: it needs a Web ACL immediately. Same pattern as `crm-alb` — `enable_waf = true` plus a `waf-managed` module block.
+
+**Scenario (c)** — the ARN does not resolve at all. The resources are already
+gone and the state is purely stale. Same cleanup as scenario (a).
+
+- [ ] Outcome recorded in `waf-verification-record.md` under V10, and V10 updated in `waf-verification-report.md`
+
+---
+
+## Step 8 — osTicket HTTPS (not an SOW blocker, but the portal is on plain HTTP)
+
+### 8a. Get the validation CNAME
 
 ```bash
 ACCT=$(aws sts get-caller-identity --query Account --output text)
@@ -383,7 +595,7 @@ aws acm describe-certificate --region us-east-2 \
 
 This is a **different** record from the first cert's. If anyone already added one for `tickets.*`, it is dead.
 
-### 6b. Wait for ISSUED
+### 8b. Wait for ISSUED
 
 ```bash
 ACCT=$(aws sts get-caller-identity --query Account --output text)
@@ -396,7 +608,7 @@ aws acm describe-certificate --region us-east-2 \
 
 - [ ] Status is `ISSUED`
 
-### 6c. Enable HTTPS
+### 8c. Enable HTTPS
 
 ```bash
 git fetch insight-remote main
@@ -434,7 +646,7 @@ gh pr create --base main --head feat/osticket-enable-https \
 
 ---
 
-## Step 7 — Baselines for crm and osticket (after ~1 week of traffic)
+## Step 9 — Baselines for crm and osticket (after ~1 week of traffic)
 
 They currently run on module-default thresholds (600 / 400 / 300 / 100).
 
@@ -466,25 +678,9 @@ Then set per-ACL thresholds at roughly 1.5–2× observed peak in `terraform/liv
 
 ---
 
-## Step 8 — Housekeeping (optional)
+## Step 10 — Housekeeping (optional)
 
-### 8a. Orphaned `icc-alb` state file
-
-`crm-alb` was renamed from `icc-alb` in PR #45, and a state file remains at the old key. Confirm it is not a second state tracking the same ALB.
-
-```bash
-ACCT=$(aws sts get-caller-identity --query Account --output text)
-[ "$ACCT" != "547368325532" ] && { echo "WRONG ACCOUNT ($ACCT) — need SharedServices"; exit 1; }
-
-aws s3 ls s3://lza-terraform-state-547368325532/live/perimeter/icc-alb/ --region us-east-2
-aws s3 cp s3://lza-terraform-state-547368325532/live/perimeter/icc-alb/terraform.tfstate - --region us-east-2 \
-  | jq '{serial, resource_count: (.resources | length), addresses: [.resources[].type + "." + .resources[].name] | unique}'
-```
-
-- [ ] If `resource_count` is 0, delete the object and its lock-table `-md5` item
-- [ ] If non-zero, work out which state owns the live ALB before touching anything
-
-### 8b. Backup tagging for migration targets
+### 10a. Backup tagging for migration targets
 
 `cti-v7` held weeks of hand-configuration with no recovery point because the leaf carried no `BackupPlan` tag, so AWS Backup never covered it. Add `BackupPlan = "Continuous"` to the tags of any long-lived migration target.
 
@@ -500,10 +696,15 @@ aws s3 cp s3://lza-terraform-state-547368325532/live/perimeter/icc-alb/terraform
 | PCI ALB deployment | Not an SOW deliverable. Account and VPC exist but hold no workload, cert or ALB. |
 | CloudFront / API Gateway WAF | No such resources exist in this estate. |
 | Geo-blocking | SOW says "if required". Capability built; needs a business answer on which countries are served first. |
-| PR 3 (`waf-logs` list refactor) | Nice-to-have. `waf-logs` currently covers ingress + scriptcase; adding crm + osticket is a small follow-up. |
+
+**Removed from this table:** the `waf-logs` list refactor was previously listed here as a "nice-to-have… small follow-up". That was wrong. Two of the four protected resources were delivering **zero** log records as a direct result, which puts it inside the SOW logging deliverable. It is now **Step 6**, and the fix is PR #69.
 
 ---
 
 ## Definition of done
 
-SOW is signable when Steps 1–5 are complete. Steps 6–8 are operational follow-ups that do not gate sign-off — though Step 6 is worth prioritising, because a public ticket portal is currently served over plain HTTP.
+SOW is signable when **Steps 1–7** are complete.
+
+Steps 6 and 7 are in that set, not outside it. Step 6 is part of the SOW logging deliverable, and step 7 gates the claim in acceptance criterion 1 that every public ALB is protected — a claim that is only as good as the list of ALBs it was checked against.
+
+Steps 8–10 are operational follow-ups that do not gate sign-off, though step 8 is worth prioritising because a public ticket portal is currently served over plain HTTP.
