@@ -23,6 +23,37 @@
 # allowlists move to the egress NAT EIPs (3.151.88.5 / 3.133.15.33).
 ###############################################################################
 
+###############################################################################
+# WAF
+#
+# Same managed-rule baseline as the other public ALBs. A public ticket portal
+# is a standard target for credential stuffing and spam-bot signups, so this
+# is the ALB that benefits most from the rate-based rule.
+#
+# Attachment caveat: osTicket lets users upload files to tickets, which means
+# large multipart POST bodies. SizeRestrictions_BODY would block those at its
+# default action, so it stays in Count (the waf-managed module's default
+# override list already includes it). If attachments still fail, check
+# CountedRequests on that sub-rule before touching anything else.
+#
+# Logging and alarms are wired in the sibling waf-logs / waf-monitoring
+# leaves — add "osticket-alb-waf" to their web_acl_names lists after this
+# applies.
+###############################################################################
+
+module "waf" {
+  source = "../../../modules/waf-managed"
+
+  name  = "${var.stack_name}-waf"
+  scope = "REGIONAL"
+
+  rate_limit = var.waf_rate_limit
+
+  tags = {
+    Role = "osticket-alb-waf"
+  }
+}
+
 module "alb" {
   source = "../../../modules/alb"
 
@@ -45,7 +76,7 @@ module "alb" {
   health_check_matcher = var.health_check_matcher
 
   certificate_arn = var.enable_https ? aws_acm_certificate.osticket.arn : ""
-  waf_web_acl_arn = var.waf_web_acl_arn
+  waf_web_acl_arn = module.waf.web_acl_arn
 
   # Backend is cross-VPC over TGW; disable cross-zone to avoid extra cross-AZ
   # transfer (same call as crm-alb / webapps).
