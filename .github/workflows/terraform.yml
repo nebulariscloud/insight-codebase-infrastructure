@@ -331,13 +331,26 @@ jobs:
       # This step fails the apply if the plan would delete anything, unless
       # the commit message explicitly authorises it.
       #
-      # TO AUTHORISE A DESTROY, put one of these lines in the PR description
-      # (squash-merge carries it into the commit message):
+      # TO AUTHORISE A DESTROY, use any ONE of these three:
       #
-      #   ALLOW-DESTROY: all
-      #   ALLOW-DESTROY: terraform/live/production/cti-v7
+      #   a) A line in the PR description:
+      #        ALLOW-DESTROY: terraform/live/production/cti-v7
+      #        ALLOW-DESTROY: all
       #
-      # Prefer naming the specific leaf. "all" is a blunt instrument.
+      #   b) The same line in the branch's commit message.
+      #
+      #   c) An `allow-destroy` label on the PR (blanket for that PR only).
+      #
+      # Prefer (a) with a named leaf. "all" and the label are blunt instruments.
+      #
+      # WHY ALL THREE: the first version of this guard read only
+      # github.event.head_commit.message, on the assumption that a squash merge
+      # carries the PR description. In this repo it does not — it carries the
+      # BRANCH commit message. PR #57 was merged on 2026-08-08 with a valid
+      # authorisation sitting in its description, and the guard blocked it
+      # anyway because it could not see it. Reading the PR body via the API
+      # fixes that, and the label gives a one-click escape hatch when a
+      # description edit is inconvenient.
       #
       # Note "replace" shows up as ["delete","create"] (or ["create","delete"]
       # for create_before_destroy), so in-place replacements are caught too —
@@ -349,6 +362,9 @@ jobs:
         env:
           COMMIT_MSG: ${{ github.event.head_commit.message }}
           LEAF: ${{ matrix.leaf }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
 
@@ -375,15 +391,37 @@ jobs:
           echo "Destroy guard: ${count} resource(s) would be DELETED or REPLACED in ${LEAF}:"
           sed 's/^/  /' doomed.txt
 
+          # Gather every place an authorisation might live. Squash merges here
+          # carry the branch commit message, so the PR description has to be
+          # fetched separately via the API.
+          PR_BODY=""
+          PR_LABELS=""
+          if PR_JSON=$(gh api "repos/${REPO}/commits/${SHA}/pulls" 2>/dev/null); then
+            PR_BODY=$(printf '%s' "${PR_JSON}" | jq -r '.[0].body // ""')
+            PR_LABELS=$(printf '%s' "${PR_JSON}" | jq -r '[.[]?.labels[]?.name] | join(" ")')
+            PR_NUM=$(printf '%s' "${PR_JSON}" | jq -r '.[0].number // "none"')
+            echo "Destroy guard: resolved PR #${PR_NUM}; labels: ${PR_LABELS:-<none>}"
+          else
+            echo "Destroy guard: could not resolve a PR for ${SHA} (direct push?). Falling back to the commit message only."
+          fi
+
+          # Blanket per-PR escape hatch via label.
+          case " ${PR_LABELS} " in
+            *" allow-destroy "*)
+              echo "Destroy guard: 'allow-destroy' label present on the PR. Proceeding."
+              exit 0
+              ;;
+          esac
+
           # Exact whole-line match on the authorisation, NOT a substring match.
           #
           # A naive `grep -F "ALLOW-DESTROY: $LEAF"` is a substring test, so
           # "ALLOW-DESTROY: terraform/live/production/webapps-php73" would also
           # authorise destroys in ".../webapps" — a real collision in this repo,
           # which has both. awk gives an exact compare after stripping
-          # surrounding whitespace and any trailing CR (squash-merge commit
-          # bodies frequently carry \r).
-          if awk -v leaf="${LEAF}" '
+          # surrounding whitespace and any trailing CR (PR bodies and
+          # squash-merge commit bodies frequently carry \r).
+          if printf '%s\n%s\n' "${COMMIT_MSG}" "${PR_BODY}" | awk -v leaf="${LEAF}" '
               /^[[:space:]]*ALLOW-DESTROY:/ {
                 v = $0
                 sub(/^[[:space:]]*ALLOW-DESTROY:[[:space:]]*/, "", v)
@@ -391,8 +429,8 @@ jobs:
                 if (v == "all" || v == leaf) { found = 1 }
               }
               END { exit(found ? 0 : 1) }
-            ' <<< "${COMMIT_MSG}"; then
-            echo "Destroy guard: authorisation found in commit message. Proceeding."
+            '; then
+            echo "Destroy guard: authorisation found in commit message or PR description. Proceeding."
             exit 0
           fi
 
@@ -403,18 +441,25 @@ jobs:
             echo
             sed 's/^/- `/; s/$/`/' doomed.txt
             echo
-            echo "No \`ALLOW-DESTROY\` authorisation was found in the commit message."
+            echo "No authorisation was found in the commit message, the PR"
+            echo "description, or the PR labels."
             echo
             echo "This usually means the leaf has **pre-existing drift** unrelated to"
             echo "the change being merged — a stale id in tfvars, or an edit that was"
             echo "made and never applied. Investigate the drift on its own PR."
             echo
-            echo "If the destruction is genuinely intended, add this line to the PR"
-            echo "description and re-merge:"
+            echo "If the destruction is genuinely intended, authorise it with ONE of:"
             echo
-            echo '```'
-            echo "ALLOW-DESTROY: ${LEAF}"
-            echo '```'
+            echo "1. A line in the PR description (then re-run this job — the"
+            echo "   description is read live, so no re-merge is needed):"
+            echo
+            echo '   ```'
+            echo "   ALLOW-DESTROY: ${LEAF}"
+            echo '   ```'
+            echo
+            echo "2. An \`allow-destroy\` label on the PR (blanket for that PR)."
+            echo
+            echo "3. The same \`ALLOW-DESTROY:\` line in the branch commit message."
           } >> "${GITHUB_STEP_SUMMARY}"
 
           echo "::error title=Destroy guard blocked ${LEAF}::Plan would delete/replace ${count} resource(s) with no ALLOW-DESTROY authorisation. See the job summary."
