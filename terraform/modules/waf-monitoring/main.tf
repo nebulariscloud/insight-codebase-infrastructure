@@ -37,6 +37,18 @@ locals {
 
   # Dashboard widget grid. One row per Web ACL.
   webacl_keys = sort(keys(var.web_acls))
+
+  # Resolve each Web ACL's effective thresholds: its own override if set,
+  # otherwise the module-level default. Keeps the alarm blocks below readable
+  # and puts the fallback logic in exactly one place.
+  thresholds = {
+    for key, acl in var.web_acls : key => {
+      blocked_total    = coalesce(acl.blocked_requests_threshold, var.blocked_requests_threshold)
+      rate_limit       = coalesce(acl.rate_limit_block_threshold, var.rate_limit_block_threshold)
+      common_rule_set  = coalesce(acl.common_rule_set_block_threshold, var.common_rule_set_block_threshold)
+      known_bad_inputs = coalesce(acl.known_bad_inputs_block_threshold, var.known_bad_inputs_block_threshold)
+    }
+  }
 }
 
 ###############################################################################
@@ -93,7 +105,7 @@ resource "aws_cloudwatch_metric_alarm" "blocked_total" {
   statistic           = "Sum"
   period              = 300
   evaluation_periods  = var.evaluation_periods
-  threshold           = var.blocked_requests_threshold
+  threshold           = local.thresholds[each.key].blocked_total
   comparison_operator = "GreaterThanThreshold"
   treat_missing_data  = "notBreaching"
 
@@ -119,7 +131,7 @@ resource "aws_cloudwatch_metric_alarm" "rate_limit_blocks" {
   statistic           = "Sum"
   period              = 300
   evaluation_periods  = var.evaluation_periods
-  threshold           = var.rate_limit_block_threshold
+  threshold           = local.thresholds[each.key].rate_limit
   comparison_operator = "GreaterThanThreshold"
   treat_missing_data  = "notBreaching"
 
@@ -145,7 +157,7 @@ resource "aws_cloudwatch_metric_alarm" "common_rule_blocks" {
   statistic           = "Sum"
   period              = 300
   evaluation_periods  = var.evaluation_periods
-  threshold           = var.common_rule_set_block_threshold
+  threshold           = local.thresholds[each.key].common_rule_set
   comparison_operator = "GreaterThanThreshold"
   treat_missing_data  = "notBreaching"
 
@@ -153,6 +165,44 @@ resource "aws_cloudwatch_metric_alarm" "common_rule_blocks" {
     WebACL = each.value.name
     Region = each.value.region
     Rule   = "AWS-CommonRuleSet"
+  }
+
+  alarm_actions = [aws_sns_topic.medium.arn]
+  ok_actions    = [aws_sns_topic.medium.arn]
+  tags          = local.default_tags
+}
+
+###############################################################################
+# Known Bad Inputs blocks - medium.
+#
+# Second of the two "somebody is probing the application" signals, alongside
+# CommonRuleSet. Catches known exploit payloads against common CVEs.
+#
+# Deliberately NOT alarmed on: AWS-IPReputation. Measured 2026-08-08, that rule
+# is ~65% of all blocks on ingress-alb-waf (peak 1712 of ~2464) because it
+# catches botnet and mass-scanner traffic. That is WAF working correctly on
+# commodity noise, and alarming on it produces pure alert fatigue. It remains
+# visible on the dashboard.
+###############################################################################
+
+resource "aws_cloudwatch_metric_alarm" "known_bad_inputs_blocks" {
+  for_each = var.enable_known_bad_inputs_alarm ? var.web_acls : {}
+
+  alarm_name          = "${var.name}-${each.key}-known-bad-inputs-blocks"
+  alarm_description   = "WAF AWS-KnownBadInputs block count on ${each.value.name} above baseline - likely targeted exploit attempts."
+  namespace           = "AWS/WAFV2"
+  metric_name         = "BlockedRequests"
+  statistic           = "Sum"
+  period              = 300
+  evaluation_periods  = var.evaluation_periods
+  threshold           = local.thresholds[each.key].known_bad_inputs
+  comparison_operator = "GreaterThanThreshold"
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    WebACL = each.value.name
+    Region = each.value.region
+    Rule   = "AWS-KnownBadInputs"
   }
 
   alarm_actions = [aws_sns_topic.medium.arn]
