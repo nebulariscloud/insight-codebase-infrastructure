@@ -1,0 +1,60 @@
+Parked 2026-08-10: instance destroyed, public_subnet_id stale, rebuild blocked on Aheeva license hostid + missing VPC BPA exclusion.
+
+WHY THIS LEAF IS PARKED
+=======================
+
+On 2026-08-08 the CI fan-out apply for WAF PR #59 destroyed this leaf's EC2
+instance (i-04dc1a79b8277f654). The leaf carried pre-existing drift — an
+ami_id updated in tfvars but never applied — so Terraform planned a
+replacement. The destroy succeeded; the create then failed because
+public_subnet_id points at subnet-0919739a39165a934, which no longer exists.
+
+Since then every module-level PR fans out to this leaf and fails with:
+
+  Error: creating EC2 Instance: ... InvalidSubnetID.NotFound:
+  The subnet ID 'subnet-0919739a39165a934' does not exist
+
+That is harmless in itself (there is nothing left to destroy, it only fails to
+create) but it turns every subsequent module PR red. A permanently-red pipeline
+trains people to ignore failures, which is how the original destruction went
+unnoticed. So the leaf is parked rather than left failing.
+
+WHAT IS BLOCKING THE REBUILD
+============================
+
+Two things, neither of them code:
+
+1. Aheeva license hostid. The in-flight license reissue was keyed to hostid
+   02417393bdd5, which died with the instance. A rebuilt instance gets a new
+   hostid. Aheeva has to confirm they can rebind before we burn another one.
+
+2. VPC Block Public Access exclusion. Option B needs one for the public subnet,
+   and `describe-vpc-block-public-access-exclusions` in Production returns
+   empty — the original exclusion presumably died with the original subnet.
+   See docs/07-Operations/cti-v7-lza-exception.md.
+
+WHAT IS ALREADY KNOWN GOOD
+==========================
+
+- EIP 3.16.53.180 (eipalloc-02826934c621235e9) SURVIVED, unassociated. The
+  Aheeva vendor allowlist for that IP is still valid, and no re-allocation is
+  needed (ec2:AllocateAddress is SCP-denied without the exception).
+- Correct public subnet is subnet-0dc7b70d38275e775 (10.12.0.192/27,
+  us-east-2a) and it DOES have the required IGW default route
+  (0.0.0.0/0 -> igw-010871f4083a631af).
+- AMI ami-0289fff8a491f450a (cti-v7-clean) is intact. The rebuild starts there.
+- The destroyed root volume is NOT recoverable: delete_on_termination was true
+  and the leaf has no BackupPlan tag, so nothing is in the LZA backup vault.
+  The sip.conf externip work has to be redone.
+
+TO UNPARK
+=========
+
+1. Get the Aheeva answer on hostid rebinding.
+2. Land the VPC BPA exclusion for subnet-0dc7b70d38275e775.
+3. Update public_subnet_id in terraform.tfvars to subnet-0dc7b70d38275e775.
+4. Delete this file.
+5. Open a PR for the leaf. Expect a CREATE, not a replacement — there is no
+   instance in state. Re-associate the surviving EIP.
+
+Full history: .kiro/journal/2026-08-08-cti-v7-destroyed-by-module-fanout.md
