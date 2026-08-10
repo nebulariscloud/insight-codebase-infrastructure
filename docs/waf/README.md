@@ -16,8 +16,21 @@ Operational and project docs for the AWS WAF deployment. Written for the SOW del
 | File | Audience | Purpose |
 |---|---|---|
 | `waf-design-decisions.md` | Engineering, audit, future maintainers | Why each design choice was made and what alternatives were considered. The "what we did and why" record. |
-| `waf-verification-record.md` | Audit, SOW acceptance | Post-deployment verification: exact AWS CLI calls and observed responses, with pass criteria. |
-| `waf-sow-closeout.md` | Insight Group + Nebularis | Final SOW status. Acceptance criteria mapped to deliverables. Sign-off block. |
+| `waf-verification-record.md` | Audit, SOW acceptance | Post-deployment verification: exact AWS CLI calls and observed responses, with pass criteria. Includes a retraction where a June conclusion proved wrong. |
+| `waf-sow-closeout.md` | Insight Group + Nebularis | **Start here for SOW status.** Acceptance criteria mapped to deliverables, the four remaining items with how to close each, a completion checklist, and the sign-off block. Revised 2026-08-10. |
+
+## Current SOW status
+
+**Substantially complete.** All four public ALBs are protected, alarms are live on measured thresholds, and all documentation is delivered.
+
+Four items remain, none blocked on engineering:
+
+1. **Bot Control** — client decision: deploy or waive
+2. **Two training sessions** — scripts are `waf-runbook.md` and `waf-tuning-guide.md`
+3. **Runbook test** — a ~30 minute block/unblock exercise
+4. **Custom rules** — review with app owners, then add rules or record the finding
+
+See the completion checklist at the end of `waf-sow-closeout.md`.
 
 ## Code
 
