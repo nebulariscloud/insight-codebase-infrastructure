@@ -156,6 +156,44 @@ jobs:
             -var-file=terraform.tfvars 2>&1 | tee plan.txt
           terraform show -no-color tfplan > plan-show.txt
 
+      #######################################################################
+      # Surface deletions in the PR comment instead of burying them in a
+      # collapsed <details> block. A reviewer skimming the sticky comment
+      # should not have to expand and read a 600-line plan to notice that
+      # something is about to be destroyed.
+      #######################################################################
+      - name: Summarise destroys
+        id: destroys
+        working-directory: ${{ matrix.leaf }}
+        run: |
+          set -euo pipefail
+          terraform show -json tfplan > plan.json
+
+          # No mapfile — see the note in the apply job's destroy guard.
+          jq -r '
+            .resource_changes[]?
+            | select(.change.actions // [] | index("delete"))
+            | "\(.address) [\(.change.actions | join(","))]"
+          ' plan.json > doomed.txt
+
+          count=$(grep -c . doomed.txt || true)
+          count=${count:-0}
+
+          echo "count=${count}" >> "$GITHUB_OUTPUT"
+          {
+            echo "list<<DOOMED_EOF"
+            if [ "$count" -eq 0 ]; then
+              echo "none"
+            else
+              cat doomed.txt
+            fi
+            echo "DOOMED_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          if [ "$count" -gt 0 ]; then
+            echo "::warning title=${{ matrix.leaf }} plans ${count} deletion(s)::This apply will be blocked on merge unless the PR description carries 'ALLOW-DESTROY: ${{ matrix.leaf }}'."
+          fi
+
       - name: Upload plan artifact
         uses: actions/upload-artifact@v4
         with:
@@ -175,10 +213,36 @@ jobs:
             const truncated = plan.length > 60000
               ? plan.slice(0, 60000) + '\n\n... (truncated, see workflow log)'
               : plan;
+            const destroyCount = parseInt('${{ steps.destroys.outputs.count }}' || '0', 10);
+            const destroyList = `${{ toJSON(steps.destroys.outputs.list) }}`;
+
+            // Deletions go ABOVE the collapsed plan, not inside it.
+            const header = destroyCount > 0
+              ? [
+                  `### \`${{ matrix.leaf }}\` plan — ⚠️ ${destroyCount} DELETION(S) PLANNED`,
+                  '',
+                  '```',
+                  JSON.parse(destroyList).trim(),
+                  '```',
+                  '',
+                  '> The destroy guard will **block the apply on merge** unless the PR',
+                  '> description contains:',
+                  '>',
+                  '> ```',
+                  `> ALLOW-DESTROY: ${{ matrix.leaf }}`,
+                  '> ```',
+                  '>',
+                  '> If you did not intend to delete anything, this leaf most likely has',
+                  '> pre-existing drift. Fix that on its own PR rather than authorising',
+                  '> the destroy here.',
+                  '',
+                ]
+              : [`### \`${{ matrix.leaf }}\` plan — no deletions`, ''];
+
             const body = [
               '<!-- tf-plan:${{ matrix.leaf }} -->',
-              '### `${{ matrix.leaf }}` plan',
-              '<details><summary>show plan</summary>',
+              ...header,
+              '<details><summary>show full plan</summary>',
               '',
               '```hcl',
               truncated,
@@ -242,6 +306,120 @@ jobs:
         working-directory: ${{ matrix.leaf }}
         run: terraform init -input=false
 
+      #######################################################################
+      # Plan first, inspect it, THEN apply that exact plan file.
+      #
+      # The previous version ran `terraform apply -auto-approve`, which
+      # re-plans internally and applies whatever it finds — nobody ever saw
+      # the diff before it executed. On 2026-08-08 that destroyed a
+      # production EC2 instance (cti-v7) that had unrelated pre-existing
+      # drift, during a run triggered by an unrelated WAF module change.
+      # Applying a saved plan file guarantees what we inspected is what runs.
+      #######################################################################
+      - name: terraform plan
+        working-directory: ${{ matrix.leaf }}
+        run: terraform plan -input=false -no-color -out tfplan -var-file=terraform.tfvars
+
+      #######################################################################
+      # Destroy guard.
+      #
+      # WHY THIS EXISTS: a change under terraform/modules/** fans out to every
+      # leaf (see the detect job). On push to main that means ~23 applies, so
+      # ANY leaf carrying pre-existing drift gets that drift executed — even
+      # though the PR author never touched it. That is how cti-v7 was lost.
+      #
+      # This step fails the apply if the plan would delete anything, unless
+      # the commit message explicitly authorises it.
+      #
+      # TO AUTHORISE A DESTROY, put one of these lines in the PR description
+      # (squash-merge carries it into the commit message):
+      #
+      #   ALLOW-DESTROY: all
+      #   ALLOW-DESTROY: terraform/live/production/cti-v7
+      #
+      # Prefer naming the specific leaf. "all" is a blunt instrument.
+      #
+      # Note "replace" shows up as ["delete","create"] (or ["create","delete"]
+      # for create_before_destroy), so in-place replacements are caught too —
+      # deliberately, since a replacement of a stateful resource is exactly
+      # the case that hurts.
+      #######################################################################
+      - name: Destroy guard
+        working-directory: ${{ matrix.leaf }}
+        env:
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+          LEAF: ${{ matrix.leaf }}
+        run: |
+          set -euo pipefail
+
+          terraform show -json tfplan > plan.json
+
+          # NOTE: deliberately no `mapfile`/`readarray` here. Those are bash 4+
+          # builtins; macOS ships bash 3.2, so using them would make this step
+          # impossible to test outside CI. Writing jq output to a file and
+          # counting lines works identically everywhere.
+          jq -r '
+            .resource_changes[]?
+            | select(.change.actions // [] | index("delete"))
+            | "\(.address)  ->  [\(.change.actions | join(","))]"
+          ' plan.json > doomed.txt
+
+          count=$(grep -c . doomed.txt || true)
+          count=${count:-0}
+
+          if [ "$count" -eq 0 ]; then
+            echo "Destroy guard: no deletions planned for ${LEAF}. Proceeding."
+            exit 0
+          fi
+
+          echo "Destroy guard: ${count} resource(s) would be DELETED or REPLACED in ${LEAF}:"
+          sed 's/^/  /' doomed.txt
+
+          # Exact whole-line match on the authorisation, NOT a substring match.
+          #
+          # A naive `grep -F "ALLOW-DESTROY: $LEAF"` is a substring test, so
+          # "ALLOW-DESTROY: terraform/live/production/webapps-php73" would also
+          # authorise destroys in ".../webapps" — a real collision in this repo,
+          # which has both. awk gives an exact compare after stripping
+          # surrounding whitespace and any trailing CR (squash-merge commit
+          # bodies frequently carry \r).
+          if awk -v leaf="${LEAF}" '
+              /^[[:space:]]*ALLOW-DESTROY:/ {
+                v = $0
+                sub(/^[[:space:]]*ALLOW-DESTROY:[[:space:]]*/, "", v)
+                sub(/[[:space:]]*\r?$/, "", v)
+                if (v == "all" || v == leaf) { found = 1 }
+              }
+              END { exit(found ? 0 : 1) }
+            ' <<< "${COMMIT_MSG}"; then
+            echo "Destroy guard: authorisation found in commit message. Proceeding."
+            exit 0
+          fi
+
+          {
+            echo "### Destroy guard BLOCKED \`${LEAF}\`"
+            echo
+            echo "The plan for this leaf would delete or replace:"
+            echo
+            sed 's/^/- `/; s/$/`/' doomed.txt
+            echo
+            echo "No \`ALLOW-DESTROY\` authorisation was found in the commit message."
+            echo
+            echo "This usually means the leaf has **pre-existing drift** unrelated to"
+            echo "the change being merged — a stale id in tfvars, or an edit that was"
+            echo "made and never applied. Investigate the drift on its own PR."
+            echo
+            echo "If the destruction is genuinely intended, add this line to the PR"
+            echo "description and re-merge:"
+            echo
+            echo '```'
+            echo "ALLOW-DESTROY: ${LEAF}"
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+          echo "::error title=Destroy guard blocked ${LEAF}::Plan would delete/replace ${count} resource(s) with no ALLOW-DESTROY authorisation. See the job summary."
+          exit 1
+
       - name: terraform apply
         working-directory: ${{ matrix.leaf }}
-        run: terraform apply -input=false -auto-approve -var-file=terraform.tfvars
+        run: terraform apply -input=false -auto-approve tfplan
