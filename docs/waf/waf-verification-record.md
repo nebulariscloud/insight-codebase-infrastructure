@@ -4,11 +4,15 @@ Post-deployment verification run by Nebularis Cloud LLC for the Insight Group AW
 
 Captures the exact AWS API calls made against the live environment after merge, with the responses observed. Use this as the audit trail for the SOW acceptance.
 
+This is the **technical appendix**. For the client-facing summary — what was
+verified, what failed, and the corrections to our own record — see
+`waf-verification-report.md`.
+
 | Item | Value |
 |---|---|
 | Environment | Insight Group AWS Organization, Perimeter account `713939170920`, region `us-east-2` |
-| Web ACLs in scope | `ingress-alb-waf`, `scriptcase-lb-waf` |
-| Verification date | 2026-06-21 (V1, V2, V4) / 2026-08-08 (V3-R) |
+| Web ACLs in scope | Round 1: `ingress-alb-waf`, `scriptcase-lb-waf`. Round 3 onward: all four, adding `crm-alb-waf` and `osticket-alb-waf` |
+| Verification dates | Round 1: 2026-06-21 (V1, V2, V3, V4) · Round 2: 2026-08-08 (V3-R) · Round 3: 2026-08-10 (V5–V11) |
 | Run by | Nebularis Cloud LLC |
 | Method | AWS CLI calls executed in the Perimeter account, read-only |
 
@@ -356,6 +360,496 @@ done
 - Each topic has the matching `insightgroup-security-{high,medium,low}@nebulariscloud.com` distribution list subscribed.
 - The `SubscriptionArn` column shows real ARNs, not `PendingConfirmation`. Confirmation links from AWS were clicked before the verification ran, so alarms now have a working email path.
 
+---
+
+# Round 3 — 2026-08-10
+
+Run after PRs #60/#65 (WAF on `crm-alb` and `osticket-alb`), #62 (per-Web-ACL
+thresholds) and #63/#66 (pipeline hardening) were merged and applied.
+
+Round 3 exists because rounds 1 and 2 checked the **two** Web ACLs that existed
+in June. Two more were created in July. The checks below therefore enumerate
+resources from AWS first and compare against configuration second, rather than
+checking the resources the configuration happens to name. That ordering is what
+surfaced V9 and V10.
+
+## V5 — Every internet-facing ALB has a Web ACL attached
+
+**Command**
+
+```bash
+ACCT=$(aws sts get-caller-identity --query Account --output text)
+echo "account: $ACCT"
+[ "$ACCT" != "713939170920" ] && { echo "WRONG ACCOUNT — need Perimeter"; exit 1; }
+
+aws elbv2 describe-load-balancers --region us-east-2 \
+  --query 'LoadBalancers[?Type==`application`].[LoadBalancerName,LoadBalancerArn]' \
+  --output text | while read -r name arn; do
+    acl=$(aws wafv2 get-web-acl-for-resource --resource-arn "$arn" --region us-east-2 \
+      --query 'WebACL.Name' --output text 2>/dev/null || echo "NONE")
+    printf "%-16s WAF=%s\n" "$name" "$acl"
+  done
+```
+
+**Result**
+
+```
+account: 713939170920
+
+ingress-alb      WAF=ingress-alb-waf
+scriptcase-lb    WAF=scriptcase-lb-waf
+crm-alb          WAF=crm-alb-waf
+osticket-alb     WAF=osticket-alb-waf
+```
+
+**Full account-wide load balancer enumeration, run 2026-08-10 while chasing V10:**
+
+```
+aws elbv2 describe-load-balancers --region us-east-2 \
+  --query 'LoadBalancers[].[LoadBalancerName,Scheme,Type,DNSName]' --output table
+
+sftp-nlb         internet-facing  network      sftp-nlb-34a55ff7c8bc1fe1.elb.us-east-2.amazonaws.com
+sftp-claro-nlb   internet-facing  network      sftp-claro-nlb-355d444eae8c5f3a.elb.us-east-2.amazonaws.com
+wazuh-nlb        internet-facing  network      wazuh-nlb-c809fdc006300e6f.elb.us-east-2.amazonaws.com
+ingress-alb      internet-facing  application  ingress-alb-122459471.us-east-2.elb.amazonaws.com
+scriptcase-lb    internet-facing  application  scriptcase-lb-1093571739.us-east-2.elb.amazonaws.com
+crm-alb          internet-facing  application  crm-alb-142110994.us-east-2.elb.amazonaws.com
+osticket-alb     internet-facing  application  osticket-alb-343594101.us-east-2.elb.amazonaws.com
+```
+
+Seven load balancers, four of them application. No `icc-alb`.
+
+**Pass criteria met**
+
+- Every application load balancer in the account returns a Web ACL. None report `NONE`.
+- The ALB list is enumerated from AWS, not from the Terraform leaf list — so an ALB
+  created outside the WAF programme would appear here rather than be invisible.
+- The enumeration is complete: exactly four ALBs exist and all four are covered.
+
+**The three NLBs cannot carry a Web ACL.** AWS WAF is a layer-7 control and
+attaches to ALBs, CloudFront, API Gateway, AppSync, Cognito user pools and App
+Runner — not to Network Load Balancers. `sftp-nlb`, `sftp-claro-nlb` and
+`wazuh-nlb` front TCP services (SFTP and Wazuh agent traffic), not HTTP, so WAF
+is not the applicable control. Their exposure is managed by security-group
+scoping. Recorded here so the count "4 of 4" is not mistaken for "4 of 7".
+
+**Note.** This is four ALBs, up from the two at SOW signing. `crm-alb` and
+`osticket-alb` were built in July, were internet-facing on `0.0.0.0/0`, and had
+no Web ACL until 2026-08-10.
+
+The first draft of this check qualified the result as "all four *known* ALBs"
+pending V10. **That qualification is now lifted** — the enumeration above is
+account-wide, so the ALB inventory is known complete and "4 of 4" is
+unconditional.
+
+## V6 — Dashboard exists and is current
+
+**Command**
+
+```bash
+ACCT=$(aws sts get-caller-identity --query Account --output text)
+[ "$ACCT" != "713939170920" ] && { echo "WRONG ACCOUNT ($ACCT) — need Perimeter"; exit 1; }
+
+aws cloudwatch list-dashboards --region us-east-2 \
+  --query 'DashboardEntries[?DashboardName==`perimeter-waf`].[DashboardName,LastModified]' \
+  --output table
+```
+
+**Result**
+
+```
+perimeter-waf    2026-08-10T18:11:59+00:00
+```
+
+**Pass criteria met**
+
+- Dashboard exists at the expected name.
+- `LastModified` is post-namespace-fix, so it carries the corrected `AWS/WAFV2`
+  widget definitions rather than the June ones.
+
+**Not covered by this check:** whether the widgets actually render populated.
+That needs a human to open the console. Tracked in `waf-finish-checklist.md`
+step 1 and listed under "Not yet verified" in `waf-verification-report.md`.
+Existence of a dashboard is not evidence that it displays anything — that is
+precisely the mistake V3 made.
+
+## V7 — All four Web ACLs return real metric datapoints
+
+Extends V3-R from two Web ACLs to four.
+
+**Command**
+
+```bash
+ACCT=$(aws sts get-caller-identity --query Account --output text)
+[ "$ACCT" != "713939170920" ] && { echo "WRONG ACCOUNT ($ACCT) — need Perimeter"; exit 1; }
+
+for acl in ingress-alb-waf scriptcase-lb-waf crm-alb-waf osticket-alb-waf; do
+  n=$(aws cloudwatch get-metric-statistics \
+    --namespace AWS/WAFV2 --metric-name AllowedRequests \
+    --dimensions Name=WebACL,Value=$acl Name=Region,Value=us-east-2 Name=Rule,Value=ALL \
+    --start-time "$(date -u -v-2H +%Y-%m-%dT%H:%M:%SZ)" \
+    --end-time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --period 300 --statistics Sum --region us-east-2 \
+    --query 'length(Datapoints)' --output text)
+  printf "%-20s datapoints(2h)=%s\n" "$acl" "$n"
+done
+```
+
+> `date -u -v-2H` is BSD/macOS. On Linux use `date -u -d '2 hours ago'`.
+
+**Result**
+
+```
+ingress-alb-waf      datapoints(2h)=36
+scriptcase-lb-waf    datapoints(2h)=19
+crm-alb-waf          datapoints(2h)=3
+osticket-alb-waf     datapoints(2h)=5
+```
+
+**Pass criteria met**
+
+- All four non-zero on the exact `[WebACL, Region, Rule]` dimension set the alarms use.
+- The lower counts on `crm-alb-waf` and `osticket-alb-waf` track their genuinely
+  lower request volume, not a broken pipeline. A pipeline fault would read `0`,
+  which is what the June namespace defect produced.
+
+## V8 — Alarm inventory and deployed thresholds
+
+**Status: PASSED — 2026-08-10, Perimeter `713939170920`. 20 alarms.**
+
+```
+$ aws cloudwatch describe-alarms --alarm-name-prefix perimeter-waf- \
+    --region us-east-2 --query 'length(MetricAlarms)' --output text
+20
+```
+
+Matches the designed set: five alarms per Web ACL (`blocked-total`,
+`common-ruleset`, `known-bad-inputs`, `rate-limit`, `no-metrics` liveness) across
+four Web ACLs. PR #62's apply landed correctly; the six-alarm capture that
+prompted the discrepancy below was a stale reading taken before the expansion.
+
+The history is retained below rather than deleted, because how the discrepancy
+was handled is the part worth keeping.
+
+---
+
+### Why this was recorded as NOT VERIFIED first
+
+PR #62 expanded the alarm set from 6 to an expected **20** — five per Web ACL
+(`blocked-total`, `common-ruleset`, `known-bad-inputs`, `rate-limit`, and the
+`no-metrics` liveness alarm) across four Web ACLs — with per-Web-ACL thresholds
+derived from `waf-traffic-baseline.md`. That leaf was applied via
+`workflow_dispatch` after its original apply was cancelled.
+
+Internal notes from 2026-08-10 recorded the 20-alarm inventory as verified. A
+later capture of `describe-alarms` output, however, listed only the original six
+alarm names. Those two records could not be reconciled from the evidence on
+hand, so **no pass was claimed and the check was left open for a re-run.**
+
+Carrying forward an unconfirmed monitoring claim is exactly the failure V3
+represents. The re-run returned 20 and the check passes — but the correct move
+was to spend the command rather than pick the record we preferred.
+
+**Command used to close it** (keep this as the standing inventory check)
+
+```bash
+ACCT=$(aws sts get-caller-identity --query Account --output text)
+[ "$ACCT" != "713939170920" ] && { echo "WRONG ACCOUNT ($ACCT) — need Perimeter"; exit 1; }
+
+echo "alarm count: $(aws cloudwatch describe-alarms \
+  --alarm-name-prefix perimeter-waf- --region us-east-2 \
+  --query 'length(MetricAlarms)' --output text)   (expected 20)"
+
+aws cloudwatch describe-alarms --alarm-name-prefix perimeter-waf- \
+  --region us-east-2 \
+  --query 'sort_by(MetricAlarms,&AlarmName)[].[AlarmName,StateValue,Namespace,Threshold]' \
+  --output table
+```
+
+**Pass criteria**
+
+- Count is 20. **Met — 20.**
+- Every `Namespace` reads `AWS/WAFV2`.
+- The four `*-no-metrics` liveness alarms are present and `OK`.
+- Thresholds match the baseline-derived values: ingress 4000/700/600/100,
+  scriptcase 600/400/250/100, and crm + osticket on the module defaults
+  600/400/300/100.
+
+The count is confirmed. The per-alarm namespace and threshold columns are worth
+eyeballing on the same command output when the dashboard is opened for checklist
+step 1, since both come from the same `describe-alarms` call.
+
+If a future run returns 6, the `waf-monitoring` leaf did not apply and needs
+re-driving via `workflow_dispatch` with `apply=true`.
+
+## V9 — WAF log records actually landing in S3, per Web ACL
+
+**Status: FAILED on first run, remediated the same day. 3 of 4 confirmed;
+`osticket-alb-waf` awaiting one request against an idle ALB.**
+
+V2 confirmed logging was *attached*. It did not confirm records were *arriving*,
+and it only covered the two Web ACLs that existed at the time. This check does
+both, for all four.
+
+**Command**
+
+```bash
+ACCT=$(aws sts get-caller-identity --query Account --output text)
+[ "$ACCT" != "713939170920" ] && { echo "WRONG ACCOUNT ($ACCT) — need Perimeter"; exit 1; }
+
+for acl in ingress-alb-waf scriptcase-lb-waf crm-alb-waf osticket-alb-waf; do
+  n=$(aws s3 ls \
+    "s3://aws-waf-logs-713939170920-us-east-2/AWSLogs/713939170920/WAFLogs/us-east-2/$acl/" \
+    --recursive 2>/dev/null | wc -l | tr -d ' ')
+  printf "%-20s log objects=%s\n" "$acl" "$n"
+done
+```
+
+**Result — first run, before remediation**
+
+```
+ingress-alb-waf      log objects=28812
+scriptcase-lb-waf    log objects=15492
+crm-alb-waf          log objects=0
+osticket-alb-waf     log objects=0
+```
+
+**Fail.** Two of four protected resources had never delivered a log record.
+
+**Root cause.** `terraform/live/perimeter/waf-logs` took one variable per Web
+ACL:
+
+```hcl
+ingress_web_acl_name    = "ingress-alb-waf"
+scriptcase_web_acl_name = "scriptcase-lb-waf"
+```
+
+with no way to express a third or fourth. When `crm-alb` and `osticket-alb` were
+built in July and given Web ACLs, no mechanism existed to enrol them. Nothing
+failed — the leaf planned clean and applied clean the entire time.
+
+Same shape as the namespace defect in V3: an uncovered case that produced no
+error signal. Both were found only by asserting on observed data.
+
+This is a **delivery miss on the SOW logging deliverable**, not a change
+request. It had also been mischaracterised internally as an optional refactor.
+
+**Remediation — merged and applied 2026-08-10.** PR **#69** replaced the fixed
+variable pair with a `web_acl_names` list covering all four. The plan was
+create-only, exactly as predicted — the `waf-logs` module keys
+`aws_wafv2_web_acl_logging_configuration` by Web ACL ARN, and both existing ARNs
+were unchanged, so the two live configurations kept their state addresses and did
+not appear in the plan at all:
+
+```
++ module.waf_logs.aws_wafv2_web_acl_logging_configuration.this["arn:...regional/webacl/crm-alb-waf/4fae2434-cd14-4cdb-b55d-62ccea26e7a9"]
++ module.waf_logs.aws_wafv2_web_acl_logging_configuration.this["arn:...regional/webacl/osticket-alb-waf/2a40b8db-cfb1-4730-b957-9f9da997cb6f"]
+
+Plan: 2 to add, 0 to change, 0 to destroy.
+```
+
+No `ALLOW-DESTROY` was needed. An earlier internal prediction that this fix would
+require destroy authorisation — on the assumption the state addresses would
+change to name-keyed — was wrong; the module was already ARN-keyed.
+
+**Result — re-run after apply**
+
+```
+ingress-alb-waf      log objects=28830
+scriptcase-lb-waf    log objects=15502
+crm-alb-waf          log objects=1
+osticket-alb-waf     log objects=0
+```
+
+**3 of 4 confirmed.** `crm-alb-waf` moved 0 → 1. The transition from zero to one
+is the meaningful signal: it proves the logging configuration, the bucket policy
+and the KMS grant all work for a newly enrolled Web ACL. Volume follows traffic
+from there.
+
+`osticket-alb-waf` still reads 0. Its logging configuration is attached and byte
+for byte identical to the one now proven on `crm-alb-waf`; WAF writes an object
+only after inspecting a request, and the osTicket ALB has had none since the
+apply. **This is an idle-ALB artefact, not a configuration fault** — but it is
+recorded as unconfirmed rather than assumed, because assuming is how V3 went
+wrong.
+
+**Closing step for V9**
+
+```bash
+# Force one inspected request. Plain HTTP because the cert is still pending (V11).
+curl -sS -o /dev/null -w '%{http_code}\n' \
+  http://osticket-alb-343594101.us-east-2.elb.amazonaws.com/
+
+sleep 360   # WAF batches to S3 in roughly 5-minute windows
+
+aws s3 ls \
+  "s3://aws-waf-logs-713939170920-us-east-2/AWSLogs/713939170920/WAFLogs/us-east-2/osticket-alb-waf/" \
+  --recursive | wc -l
+```
+
+Pass: count is 1 or more. Any HTTP status is fine — a 200, 302, 404 or even a 503
+all mean WAF inspected the request, which is the only thing being tested.
+
+If it still reads 0 after ten minutes with a confirmed request, then it is a real
+fault and the next step is `aws wafv2 get-logging-configuration` on the osTicket
+Web ACL to confirm the destination, followed by the bucket policy.
+
+## V10 — Terraform state inventory for orphans and duplicates
+
+**Status: FAILED on state hygiene. The security question is CLOSED — no stray
+load balancer exists.**
+
+The concern this raised was whether a second internet-facing load balancer was
+running outside the WAF programme. An account-wide `describe-load-balancers` on
+2026-08-10 (full output in V5) returned seven load balancers, four of them
+application, and **no `icc-alb`**. Every ALB present carries a Web ACL.
+
+Scenario (b) below is therefore ruled out. What remains is removing a stale state
+object so two states can never contend over one set of resources.
+
+Not an obvious WAF check, but V5's conclusion depends on having the complete
+list of load balancers. This enumerates state files in the backend and looks for
+any that no live leaf corresponds to.
+
+**Command**
+
+```bash
+# SharedServices 547368325532 holds the state backend.
+aws s3 ls s3://lza-terraform-state-547368325532/live/ --recursive \
+  | grep 'terraform.tfstate$'
+```
+
+**Finding**
+
+```
+s3://lza-terraform-state-547368325532/live/perimeter/icc-alb/terraform.tfstate
+  serial: 2
+  lineage: 4d7fafc8-9e41-1cdf-d9e3-14c241ab8901
+  last modified: 2026-07-17
+  resource_count: 13
+
+  addresses:
+    aws_lb.this
+    aws_security_group.alb
+    aws_acm_certificate.icc
+    aws_lb_target_group.this, aws_lb_target_group.dev
+    aws_lb_target_group_attachment.prod, aws_lb_target_group_attachment.dev
+    aws_lb_listener.http
+    aws_lb_listener_rule.prod_host, aws_lb_listener_rule.dev_host
+    aws_vpc_security_group_ingress_rule.http
+    aws_vpc_security_group_ingress_rule.https
+    aws_vpc_security_group_egress_rule.to_targets
+```
+
+`crm-alb` was renamed from `icc-alb` in PR #45. There is no
+`terraform/live/perimeter/icc-alb` leaf on `main`, so nothing plans against this
+state — but it claims 13 live resources.
+
+**Scenarios:**
+
+| | Scenario | Status |
+|---|---|---|
+| **(a)** | The state describes the same resources `crm-alb` now manages | **Possible.** Dual-management hazard: two state files claiming one set of resources; a future apply against either could contend with the other. No extra cost, no extra exposure. |
+| **(b)** | A separate `icc-alb` ALB is still running | **RULED OUT 2026-08-10** — account-wide `describe-load-balancers` shows no `icc-alb`, and all four ALBs present have a Web ACL. |
+| **(c)** | The resources are already gone; the state is purely stale | **Possible.** |
+
+Distinguishing (a) from (c) is no longer urgent — neither is an exposure — but it
+is worth one command before deletion, because it also reveals whether the
+`aws_security_group` and `aws_acm_certificate` in that state are shared with
+`crm-alb` or are unmanaged leftovers. Neither carries cost, but an unmanaged
+security group in the Perimeter account is worth knowing about.
+
+**Command to distinguish (a) from (c)**
+
+```bash
+ACCT=$(aws sts get-caller-identity --query Account --output text)
+[ "$ACCT" != "713939170920" ] && { echo "WRONG ACCOUNT ($ACCT) — need Perimeter"; exit 1; }
+
+# 1. Every load balancer AWS knows about, with its WAF status.
+aws elbv2 describe-load-balancers --region us-east-2 \
+  --query 'LoadBalancers[].[LoadBalancerName,Scheme,DNSName,LoadBalancerArn]' \
+  --output table
+
+# 2. The ALB ARN recorded in the orphaned state (run where you can read the
+#    SharedServices state bucket).
+aws s3 cp s3://lza-terraform-state-547368325532/live/perimeter/icc-alb/terraform.tfstate - \
+  | jq -r '.resources[] | select(.type=="aws_lb") | .instances[].attributes.arn'
+```
+
+**Interpretation**
+
+- The ARN from (2) matches `crm-alb`'s ARN → scenario (a). Resolution: back up,
+  then remove the orphaned state object. No infrastructure change.
+- The ARN from (2) does not resolve at all → scenario (c), the resources are
+  already gone. Same resolution.
+- (1) lists an **extra** load balancer beyond the four in V5 → scenario (b).
+  **This did not occur** — the enumeration returned exactly four ALBs. Retained
+  for the record: had it occurred, the resolution would have been to confirm
+  nothing depends on it, then decommission through the normal PR flow with
+  explicit `ALLOW-DESTROY`, never out of band.
+
+Also worth checking while in there, since the state claims them:
+
+```bash
+# Is the security group from the orphaned state still alive, and does anything use it?
+aws ec2 describe-security-groups --region us-east-2 \
+  --filters "Name=group-name,Values=*icc*" \
+  --query 'SecurityGroups[].[GroupId,GroupName,Description]' --output table
+
+# Is the ACM certificate still there?
+aws acm list-certificates --region us-east-2 \
+  --query 'CertificateSummaryList[?contains(DomainName,`icc`)].[CertificateArn,DomainName,Status]' \
+  --output table
+```
+
+Neither costs anything if it exists unused, but an unmanaged security group is
+worth knowing about, and an unused certificate is worth deleting for tidiness.
+
+Tracked as step 7 of `waf-finish-checklist.md`.
+
+**Effect on V5.** The first draft of V5 was qualified as "all four *known* ALBs"
+pending this check. Chasing V10 is what produced the account-wide load balancer
+enumeration, which lifted the qualification. V5 is now unconditional. That is the
+useful outcome of this finding, independent of the state cleanup.
+
+## V11 — HTTPS on every public endpoint
+
+**Status: FAILED — blocked on Insight Group's DNS administrator.**
+
+**Command**
+
+```bash
+ACCT=$(aws sts get-caller-identity --query Account --output text)
+[ "$ACCT" != "713939170920" ] && { echo "WRONG ACCOUNT ($ACCT) — need Perimeter"; exit 1; }
+
+aws acm describe-certificate --region us-east-2 \
+  --certificate-arn arn:aws:acm:us-east-2:713939170920:certificate/8c2c365f-a408-4bbf-8f6e-187a28665057 \
+  --query 'Certificate.{Status:Status,Domain:DomainName,Validation:DomainValidationOptions[0].ResourceRecord}' \
+  --output json
+```
+
+**Result**
+
+```json
+{
+  "Status": "PENDING_VALIDATION",
+  "Domain": "osticket.insightgrouppr.com",
+  "Validation": {
+    "Name": "_59bfd12229b222d5a7e78deac7838a08.osticket.insightgrouppr.com.",
+    "Type": "CNAME",
+    "Value": "_10c4856142562dfe22916aa3cfd5e334.jkddzztszm.acm-validations.aws."
+  }
+}
+```
+
+**Fail.** The osTicket portal is served over plain HTTP. The Web ACL inspects
+the traffic either way, so this is not a WAF defect, but credentials submitted
+to the ticket portal travel unencrypted and that belongs in the same record.
+
+**Blocked on:** one CNAME at Network Solutions (`ns47.worldnic.com` /
+`ns48.worldnic.com`), using the Name and Value above. Once ACM reads `ISSUED`,
+set `enable_https = true` on the `osticket-alb` leaf — a one-line PR.
+
 ## Verification summary
 
 | Verification | Status |
@@ -365,6 +859,19 @@ done
 | V3 — All 6 CloudWatch alarms exist and healthy | **Alarms exist: pass. "Healthy" conclusion RETRACTED 2026-08-06** — see the callout in V3. Namespace typo meant the alarms watched a non-existent namespace. |
 | V3-R — Alarm metric pipeline publishes real datapoints | **Pass (2026-08-08)** — 500,210 metrics in `AWS/WAFV2`; 24 and 14 datapoints on the alarm dimension set; 8 alarms on the corrected namespace; liveness alarms `OK` |
 | V4 — All 3 SNS topic subscriptions confirmed | Pass (2026-06-21) |
+| V5 — Every internet-facing ALB has a Web ACL attached | **Pass (2026-08-10)** — 4 of 4, enumerated account-wide. Qualification lifted; the ALB inventory is known complete |
+| V6 — Dashboard `perimeter-waf` exists and is post-fix | **Pass (2026-08-10)** — `LastModified 2026-08-10T18:11:59`. Console eyeball still outstanding |
+| V7 — All four Web ACLs return metric datapoints | **Pass (2026-08-10)** — 36 / 19 / 3 / 5 |
+| V8 — Alarm inventory (20 expected) and thresholds | **Pass (2026-08-10)** — 20 confirmed. First recorded as NOT VERIFIED on a stale six-alarm capture; re-run settled it |
+| V9 — Log records actually landing in S3, per Web ACL | **FAIL, then remediated (2026-08-10)** — was 28812/15492/**0**/**0**; PR #69 merged and applied; now 28830/15502/**1**/0. 3 of 4 confirmed; `osticket-alb-waf` needs one request against an idle ALB |
+| V10 — State backend free of orphans / duplicates | **FAIL on hygiene; security question CLOSED (2026-08-10)** — orphaned `icc-alb` state claims 13 resources, but no stray ALB exists. Scenario (b) ruled out. Cleanup outstanding |
+| V11 — HTTPS on every public endpoint | **FAIL (2026-08-10)** — osTicket on plain HTTP; ACM cert `PENDING_VALIDATION` awaiting a client-side DNS record |
+
+Round 3 changed the method, not just the coverage. V1–V4 asked "does the thing
+the configuration names exist?" V5, V9 and V10 enumerate from AWS first and
+compare against configuration second. That ordering is the only reason V9 and
+V10 were found — the configuration was internally consistent in both cases and
+would have kept passing a config-driven check indefinitely.
 
 V1, V2 and V4 remain valid — the filtering, logging and notification paths were
 never affected. V3's *existence* check was valid; its *health* conclusion was
@@ -388,7 +895,24 @@ attack.** The gap was in being told, not in being protected. Full numbers in
 
 These are deliberately out of scope for this verification document and tracked elsewhere:
 
-- **Traffic baseline capture.** Requires 7 days of dashboard data. Tracked in `docs/waf/waf-traffic-baseline.md`.
-- **Threshold narrowing based on baseline.** Follow-up after baseline capture. Default thresholds are intentionally generous to avoid alarm-storm on cold start.
+- **Dashboard widgets rendering populated.** Needs a human in the console. `waf-finish-checklist.md` step 1.
+- **Incident response runbook exercised.** Written but never run. Block/unblock exercise, ~30 min. `waf-finish-checklist.md` step 2.
+- **`crm-alb-waf` / `osticket-alb-waf` traffic baselines.** Need a week of data; both currently run on module-default thresholds. Tracked in `docs/waf/waf-traffic-baseline.md`.
 - **PCI Web ACL deployment.** Gated on the PCI account / VPC / cert landing. Template (`aws-accelerator-config/custom-stacks/pci-alb.yaml`) is built and tuned, deployment block in `customizations-config.yaml` is commented out pending pre-reqs.
 - **Bot Control rollout.** Module supports it (`enable_bot_control` toggle). Default off — opt-in cost decision per `docs/waf/waf-design-decisions.md` D6.
+- **Custom application-specific rules.** Capability delivered, none defined. Needs four owner conversations; template in `docs/waf/waf-custom-rules-finding.md`.
+
+## Method note — why rounds differ
+
+Round 1 verified that each resource the Terraform configuration named existed in
+AWS. Every check passed, and two of the conclusions were wrong.
+
+Round 3 inverted the direction: enumerate from AWS, then compare against
+configuration. `describe-load-balancers` before checking WAF attachment.
+`s3 ls` object counts before trusting `get-logging-configuration`. Every state
+file in the backend, not the leaves on `main`.
+
+Config-driven checks can only find defects the configuration knows about. V9 and
+V10 are both cases where the configuration was internally consistent and simply
+did not describe reality — a config-driven check would have kept passing on both
+indefinitely. Keep round 3's ordering for any future verification.

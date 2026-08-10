@@ -15,16 +15,26 @@ Operational and project docs for the AWS WAF deployment. Written for the SOW del
 
 | File | Audience | Purpose |
 |---|---|---|
+| `waf-verification-report.md` | **Insight Group** | **The client deliverable.** Every verification we ran, in plain English: what passed, what failed, what is not yet verified, and four corrections to our own earlier reporting. |
 | `waf-design-decisions.md` | Engineering, audit, future maintainers | Why each design choice was made and what alternatives were considered. The "what we did and why" record. |
-| `waf-verification-record.md` | Audit, SOW acceptance | Post-deployment verification: exact AWS CLI calls and observed responses, with pass criteria. Includes a retraction where a June conclusion proved wrong. |
+| `waf-verification-record.md` | Audit, engineering | Technical appendix to the report: exact AWS CLI calls and observed responses, with pass criteria. 11 checks across 3 rounds, including a retraction where a June conclusion proved wrong. |
 | `waf-sow-closeout.md` | Insight Group + Nebularis | SOW status and reasoning. Acceptance criteria mapped to deliverables, the remaining items, and the sign-off block. Revised 2026-08-10. |
 | `waf-finish-checklist.md` | Whoever is finishing the work | **The execution doc.** Every remaining step in order with copy-paste commands. |
 | `waf-training-sessions.md` | Whoever delivers the training | Ready-to-read material for both required sessions, with delivery record. |
 | `waf-custom-rules-finding.md` | Engineering + app owners | Template for the custom-rules review, the questions to ask, and the written finding. |
 
-## → To finish the SOW, use `waf-finish-checklist.md`
+## Which doc do I want?
 
-That is the execution doc: every remaining step in order, with the exact commands to paste. Steps marked **[HUMAN]** are conversations or sessions with nothing to run. 35 checkboxes, work top to bottom.
+| I want to… | Read |
+|---|---|
+| Hand Insight Group a record of what we verified | `waf-verification-report.md` |
+| Check the exact command and output behind a claim | `waf-verification-record.md` |
+| Know where the SOW stands and what's owed | `waf-sow-closeout.md` |
+| **Finish the remaining work** | **`waf-finish-checklist.md`** |
+| Understand why a design choice was made | `waf-design-decisions.md` |
+| Respond to an alarm right now | `waf-runbook.md` |
+
+`waf-finish-checklist.md` is the execution doc: every remaining step in order, with the exact commands to paste. Steps marked **[HUMAN]** are conversations or sessions with nothing to run. Work top to bottom.
 
 Use `waf-sow-closeout.md` for **status and reasoning**. Use `waf-finish-checklist.md` to **get it done**.
 
@@ -35,16 +45,28 @@ Supporting material for the remaining items:
 
 ## Current SOW status
 
-**Substantially complete.** All four public ALBs are protected, alarms are live on measured thresholds, and all documentation is delivered.
+**Substantially complete.** All four public ALBs are inspected by WAF with OWASP-aligned managed rule groups and per-IP rate limiting, alarms are live on measured thresholds, and all documentation is delivered.
 
-Four items remain, none blocked on engineering:
+**Closed 2026-08-10:**
 
-1. **Bot Control** — client decision: deploy or waive
-2. **Two training sessions** — scripts are `waf-runbook.md` and `waf-tuning-guide.md`
-3. **Runbook test** — a ~30 minute block/unblock exercise
-4. **Custom rules** — review with app owners, then add rules or record the finding
+- Logging enrolled for `crm-alb-waf` and `osticket-alb-waf` — **PR #69** merged and applied. `crm-alb-waf` confirmed delivering (0 → 1 objects).
+- Alarm inventory confirmed at **20**. The earlier six-alarm reading was stale.
+- Account-wide load balancer enumeration: **4 ALBs, all with a Web ACL, no `icc-alb`.** The orphaned state file does not correspond to a live unprotected endpoint.
 
-See the completion checklist at the end of `waf-sow-closeout.md`.
+**Nebularis to close — engineering, no client input, and no additional charge:**
+
+1. **`osticket-alb-waf` log delivery** — attached and identically configured to the one now proven working, but its ALB is idle so it has nothing to write. One request closes it. Checklist step 6c.
+2. **Dashboard visual confirmation** and **runbook exercise**. Checklist steps 1 and 2.
+3. **Remove the orphaned `icc-alb` state object** — state hygiene, not exposure. Checklist step 7.
+
+**Requires Insight Group:**
+
+4. **Bot Control** — decision: deploy or waive in writing
+5. **Custom rules** — four short owner conversations, then rules or a recorded finding
+6. **Two training sessions** — scripts are `waf-runbook.md` and `waf-tuning-guide.md`
+7. **osTicket DNS validation CNAME** — **the only live exposure left.** The ticket portal is on plain HTTP, so credentials submitted to it travel unencrypted. One CNAME at Network Solutions; values are in `waf-sow-closeout.md`.
+
+The items closed above were found by a wider verification round on 2026-08-10, after the June closeout had already reported those areas as complete. The findings, why they went unnoticed, and how they resolved are written up in `waf-verification-report.md`; status and the payment position are in `waf-sow-closeout.md`.
 
 ## Code
 
