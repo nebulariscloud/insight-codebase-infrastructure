@@ -8,15 +8,50 @@ Captures the exact AWS API calls made against the live environment after merge, 
 |---|---|
 | Environment | Insight Group AWS Organization, Perimeter account `713939170920`, region `us-east-2` |
 | Web ACLs in scope | `ingress-alb-waf`, `scriptcase-lb-waf` |
-| Verification date | 2026-06-21 |
+| Verification date | 2026-06-21 (V1, V2, V4) / 2026-08-08 (V3-R) |
 | Run by | Nebularis Cloud LLC |
 | Method | AWS CLI calls executed in the Perimeter account, read-only |
+
+> ## ⚠️ RUN EVERY CHECK IN PERIMETER `713939170920`
+>
+> All WAF resources — Web ACLs, the logs bucket and CMK, the alarms, dashboard
+> and SNS topics — live in **Perimeter**. Production `395516496764` holds the
+> EC2/RDS workloads and the shared-prod VPC but **no WAF at all**.
+>
+> Querying WAF from Production returns zero metrics, no Web ACLs and no alarms,
+> which is **indistinguishable from a broken pipeline**. That mistake cost
+> several hours of misdiagnosis on 2026-08-08. Every block below therefore opens
+> with an account assertion. Do not remove it, and do not record a result
+> without stating the account it came from.
+>
+> ```bash
+> ACCT=$(aws sts get-caller-identity --query Account --output text)
+> echo "account: $ACCT"
+> [ "$ACCT" != "713939170920" ] && { echo "WRONG ACCOUNT — need Perimeter 713939170920"; exit 1; }
+> ```
+>
+> Account map:
+>
+> | Account | ID | Holds |
+> |---|---|---|
+> | **Perimeter** | `713939170920` | All Web ACLs, all four public ALBs, waf-logs bucket + CMK, waf-monitoring alarms/dashboard/SNS |
+> | Production | `395516496764` | shared-prod VPC, EC2 workloads, RDS. No WAF. |
+> | PCI | `247514667218` | Empty VPC, no workload |
+>
+> **Account confirmed for V1/V2/V4:** Perimeter `713939170920`. Verified
+> retroactively from the recorded outputs, which contain the
+> `aws-waf-logs-713939170920-us-east-2` bucket name and
+> `arn:aws:wafv2:us-east-2:713939170920:regional/webacl/...` ARNs. The original
+> record only implied this; it is now stated.
 
 ## V1 — WAF logs bucket exists and is properly encrypted
 
 **Command**
 
 ```bash
+ACCT=$(aws sts get-caller-identity --query Account --output text)
+[ "$ACCT" != "713939170920" ] && { echo "WRONG ACCOUNT ($ACCT) — need Perimeter"; exit 1; }
+
 aws s3api get-bucket-encryption \
   --bucket aws-waf-logs-713939170920-us-east-2 \
   --region us-east-2
@@ -55,6 +90,9 @@ aws s3api get-bucket-encryption \
 **Commands**
 
 ```bash
+ACCT=$(aws sts get-caller-identity --query Account --output text)
+[ "$ACCT" != "713939170920" ] && { echo "WRONG ACCOUNT ($ACCT) — need Perimeter"; exit 1; }
+
 INGRESS_ARN=$(aws wafv2 list-web-acls --scope REGIONAL --region us-east-2 \
   --query "WebACLs[?Name=='ingress-alb-waf'].ARN | [0]" --output text)
 
@@ -117,6 +155,9 @@ aws wafv2 get-logging-configuration --resource-arn "$SCRIPTCASE_ARN" --region us
 **Command**
 
 ```bash
+ACCT=$(aws sts get-caller-identity --query Account --output text)
+[ "$ACCT" != "713939170920" ] && { echo "WRONG ACCOUNT ($ACCT) — need Perimeter"; exit 1; }
+
 aws cloudwatch describe-alarms --alarm-name-prefix perimeter-waf- \
   --region us-east-2 \
   --query 'MetricAlarms[].[AlarmName,StateValue]' \
@@ -186,25 +227,26 @@ Added 2026-08-06 to replace the retracted V3 check. The lesson from the
 namespace defect is that alarm *state* proves nothing when
 `treat_missing_data = "notBreaching"`. This check asserts on datapoints.
 
-**Status: PENDING** — run after the namespace fix is merged and applied.
+**Status: PASSED — 2026-08-08, Perimeter `713939170920` / us-east-2.**
 
 **Command**
 
 ```bash
+ACCT=$(aws sts get-caller-identity --query Account --output text)
+echo "account: $ACCT"
+[ "$ACCT" != "713939170920" ] && { echo "WRONG ACCOUNT — need Perimeter"; exit 1; }
+
 # 1. The namespace must be non-empty. This is the check that would have
 #    caught the original defect.
 aws cloudwatch list-metrics --namespace AWS/WAFV2 --region us-east-2 \
   --query 'length(Metrics)' --output text
-# PASS: a number > 0.   FAIL: 0 or empty.
 
-# 2. Dimension sets AWS actually emits must match what the alarms specify.
+# 2. Dimension sets AWS actually emits must include what the alarms specify.
 aws cloudwatch list-metrics --namespace AWS/WAFV2 --region us-east-2 \
-  --query 'Metrics[].{Metric:MetricName,Dims:Dimensions[].{N:Name,V:Value}}' \
-  --output json | head -40
-# PASS: dimension names are exactly WebACL / Region / Rule.
+  --query 'Metrics[:5].{M:MetricName,D:Dimensions[].Name}' --output json
 
 # 3. A real datapoint must exist for each Web ACL.
-for acl in ingress-alb-waf scriptcase-lb-waf crm-alb-waf osticket-alb-waf; do
+for acl in ingress-alb-waf scriptcase-lb-waf; do
   n=$(aws cloudwatch get-metric-statistics \
     --namespace AWS/WAFV2 --metric-name AllowedRequests \
     --dimensions Name=WebACL,Value=$acl Name=Region,Value=us-east-2 Name=Rule,Value=ALL \
@@ -214,31 +256,72 @@ for acl in ingress-alb-waf scriptcase-lb-waf crm-alb-waf osticket-alb-waf; do
     --query 'length(Datapoints)' --output text)
   printf "%-20s datapoints(2h)=%s\n" "$acl" "$n"
 done
-# PASS: every Web ACL reports a non-zero count.
 
-# 4. The liveness alarms must exist and must NOT be in INSUFFICIENT_DATA
-#    once metrics are flowing.
+# 4. Alarms must all report the corrected namespace.
 aws cloudwatch describe-alarms --alarm-name-prefix perimeter-waf- \
   --region us-east-2 \
   --query 'MetricAlarms[].[AlarmName,StateValue,Namespace]' --output table
-# PASS: Namespace column reads AWS/WAFV2 on every row; the -no-metrics
-#       alarms sit in OK (they alarm on absence, so OK = metrics present).
 ```
 
-**Pass criteria**
+**Result**
 
-- `AWS/WAFV2` namespace returns a non-zero metric count.
-- Emitted dimension names match the alarm definitions exactly.
-- Every Web ACL has at least one real datapoint in a recent window.
-- Every alarm's `Namespace` field reads `AWS/WAFV2`.
-- The four `-no-metrics` liveness alarms report `OK`, proving positively that
-  metrics are arriving rather than merely that no threshold was crossed.
+```
+account: 713939170920
+
+1. AWS/WAFV2 metric count: 500210
+
+2. Emitted dimension sets (sample):
+   AllowedRequests  -> [WebACL, Country, Region]
+   BlockedRequests  -> [WebACL, Country, Region]
+   CountRuleMatch   -> [Resource, LabelName, ResourceType, LabelNamespace]
+   SampleBlockedRequest -> [VerificationStatus, Organization, WebACL,
+                            BotCategory, Region, Intent, BotName]
+
+3. ingress-alb-waf      datapoints(2h)=24
+   scriptcase-lb-waf    datapoints(2h)=14
+
+4. perimeter-waf-ingress-blocked-total             OK   AWS/WAFV2
+   perimeter-waf-ingress-common-ruleset-blocks     OK   AWS/WAFV2
+   perimeter-waf-ingress-no-metrics                OK   AWS/WAFV2
+   perimeter-waf-ingress-rate-limit-blocks         OK   AWS/WAFV2
+   perimeter-waf-scriptcase-blocked-total          OK   AWS/WAFV2
+   perimeter-waf-scriptcase-common-ruleset-blocks  OK   AWS/WAFV2
+   perimeter-waf-scriptcase-no-metrics             OK   AWS/WAFV2
+   perimeter-waf-scriptcase-rate-limit-blocks      OK   AWS/WAFV2
+```
+
+**Pass criteria met**
+
+- `AWS/WAFV2` returns **500,210** metrics. Non-zero, so the namespace resolves.
+- Emitted dimensions include the `[WebACL, Region, Rule]` combination the alarms
+  use. WAF fans out several dimension combinations per metric (per-country,
+  per-label, per-bot-category), which is why the namespace holds half a million
+  entries — the alarms target the right combination, proven by check 3.
+- Both Web ACLs return real datapoints on the exact alarm dimension set.
+- Every alarm's `Namespace` reads `AWS/WAFV2`.
+- **The two `-no-metrics` liveness alarms report `OK`, which is the meaningful
+  signal.** They alarm on *absence* (`treat_missing_data = "breaching"`), so
+  `OK` positively confirms metrics are arriving. This is precisely the ambiguity
+  D13 was designed to remove: in June, `OK` on the threshold alarms meant
+  nothing; here, `OK` on the liveness alarms means something.
+
+**Confirms the namespace typo was a real defect, not cosmetic.** `AWS/WAFV2`
+holds 500K metrics; `AWS/WAFv2` is not a namespace WAF publishes to. The June
+alarms had no data source and could never have fired under any circumstances.
+
+**Process note.** An earlier attempt at this check returned `0` and was briefly
+recorded as "the fix did not work". That measurement was taken in **Production**,
+where no WAF exists. The conclusion was withdrawn. Hence the account assertion
+now leading every block in this document.
 
 ## V4 — SNS subscriptions confirmed for all three severity tiers
 
 **Command**
 
 ```bash
+ACCT=$(aws sts get-caller-identity --query Account --output text)
+[ "$ACCT" != "713939170920" ] && { echo "WRONG ACCOUNT ($ACCT) — need Perimeter"; exit 1; }
+
 for sev in high medium low; do
   echo "=== $sev ==="
   TOPIC_ARN=$(aws sns list-topics --region us-east-2 \
@@ -280,17 +363,26 @@ done
 | V1 — Logs bucket exists, KMS-encrypted, hardened | Pass (2026-06-21) |
 | V2 — Logging attached to both Web ACLs with header redaction | Pass (2026-06-21) |
 | V3 — All 6 CloudWatch alarms exist and healthy | **Alarms exist: pass. "Healthy" conclusion RETRACTED 2026-08-06** — see the callout in V3. Namespace typo meant the alarms watched a non-existent namespace. |
-| V3-R — Alarm metric pipeline publishes real datapoints | **Pending** — run after the namespace fix applies |
+| V3-R — Alarm metric pipeline publishes real datapoints | **Pass (2026-08-08)** — 500,210 metrics in `AWS/WAFV2`; 24 and 14 datapoints on the alarm dimension set; 8 alarms on the corrected namespace; liveness alarms `OK` |
 | V4 — All 3 SNS topic subscriptions confirmed | Pass (2026-06-21) |
 
 V1, V2 and V4 remain valid — the filtering, logging and notification paths were
 never affected. V3's *existence* check was valid; its *health* conclusion was
-not, and is superseded by V3-R.
+not, and is superseded by V3-R, which now passes.
 
-**What was actually broken, stated plainly:** for seven weeks the WAF inspected
-traffic, enforced rules and delivered logs correctly, but nobody would have been
-emailed if it had started blocking heavily, and the dashboard was blank. The
-protection worked; the alerting did not.
+**What was actually broken, stated plainly:** from 2026-06-21 to 2026-08-08 the
+WAF inspected traffic, enforced rules and delivered logs correctly, but nobody
+would have been emailed if it had started blocking heavily, and the dashboard was
+blank. The protection worked; the alerting did not.
+
+**What went unreported during that window.** Two consecutive-period threshold
+breaches on `ingress-alb-waf` — 2026-08-06 19:23→19:28 (1958 then 1055 blocks per
+5 min) and 2026-08-07 00:23→00:28 (2225 then 1081) — both exceeded the configured
+threshold with `evaluation_periods = 2` and should have alarmed. Per-rule
+analysis shows both were ~65% `AWS-IPReputation`, i.e. botnet and mass-scanner
+traffic that WAF blocked correctly. **No evidence of an unhandled targeted
+attack.** The gap was in being told, not in being protected. Full numbers in
+`waf-traffic-baseline.md`.
 
 ## Items not part of this verification
 
