@@ -47,21 +47,26 @@ Supporting material for the remaining items:
 
 **Substantially complete.** All four public ALBs are inspected by WAF with OWASP-aligned managed rule groups and per-IP rate limiting, alarms are live on measured thresholds, and all documentation is delivered.
 
+**Closed 2026-08-10:**
+
+- Logging enrolled for `crm-alb-waf` and `osticket-alb-waf` — **PR #69** merged and applied. `crm-alb-waf` confirmed delivering (0 → 1 objects).
+- Alarm inventory confirmed at **20**. The earlier six-alarm reading was stale.
+- Account-wide load balancer enumeration: **4 ALBs, all with a Web ACL, no `icc-alb`.** The orphaned state file does not correspond to a live unprotected endpoint.
+
 **Nebularis to close — engineering, no client input, and no additional charge:**
 
-1. **Log delivery for all four Web ACLs** — `crm-alb-waf` and `osticket-alb-waf` were delivering zero log records. Fix in **PR #69**. Checklist step 6.
-2. **Alarm inventory** — 20 expected; two internal records disagree, so it is recorded as unverified rather than assumed. Checklist step 6b.
-3. **Orphaned `icc-alb` state** — 13 resources claimed by a state file no leaf points at. Possibly an unprotected public ALB. Checklist step 7.
-4. **Dashboard visual confirmation** and **runbook exercise**. Checklist steps 1 and 2.
+1. **`osticket-alb-waf` log delivery** — attached and identically configured to the one now proven working, but its ALB is idle so it has nothing to write. One request closes it. Checklist step 6c.
+2. **Dashboard visual confirmation** and **runbook exercise**. Checklist steps 1 and 2.
+3. **Remove the orphaned `icc-alb` state object** — state hygiene, not exposure. Checklist step 7.
 
 **Requires Insight Group:**
 
-5. **Bot Control** — decision: deploy or waive in writing
-6. **Custom rules** — four short owner conversations, then rules or a recorded finding
-7. **Two training sessions** — scripts are `waf-runbook.md` and `waf-tuning-guide.md`
-8. **osTicket DNS validation CNAME** — the ticket portal is currently on plain HTTP
+4. **Bot Control** — decision: deploy or waive in writing
+5. **Custom rules** — four short owner conversations, then rules or a recorded finding
+6. **Two training sessions** — scripts are `waf-runbook.md` and `waf-tuning-guide.md`
+7. **osTicket DNS validation CNAME** — **the only live exposure left.** The ticket portal is on plain HTTP, so credentials submitted to it travel unencrypted. One CNAME at Network Solutions; values are in `waf-sow-closeout.md`.
 
-Items 1–3 were found by a wider verification round on 2026-08-10, after the June closeout had already reported the area as complete. Both the findings and why they went unnoticed are written up in `waf-verification-report.md`; status and the payment position are in `waf-sow-closeout.md`.
+The items closed above were found by a wider verification round on 2026-08-10, after the June closeout had already reported those areas as complete. The findings, why they went unnoticed, and how they resolved are written up in `waf-verification-report.md`; status and the payment position are in `waf-sow-closeout.md`.
 
 ## Code
 

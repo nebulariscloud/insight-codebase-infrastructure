@@ -23,10 +23,29 @@
 | 1 | 2026-06-21 | Original closeout |
 | 2 | 2026-08-10 | Monitoring correction — the namespace defect. Below. |
 | 3 | 2026-08-10 | Logging coverage gap and orphaned state file, found by a deeper verification round the same day. Below. |
+| 3a | 2026-08-10 | Rev 3 outcomes: logging fix applied, alarm inventory confirmed at 20, and the orphaned state confirmed **not** to be a live unprotected load balancer. Below. |
 
 Full evidence for all of it, command by command, is in
 `waf-verification-report.md` (client summary) and `waf-verification-record.md`
 (raw commands and output).
+
+---
+
+### Rev 3a — how the rev 3 findings resolved, 2026-08-10
+
+All three were chased the same day. Outcomes:
+
+| Finding | Outcome |
+|---|---|
+| 1 — two Web ACLs never logging | **Fixed.** PR #69 merged and applied; plan was `2 to add, 0 to change, 0 to destroy` as predicted. `crm-alb-waf` confirmed working (0 → 1 log objects). `osticket-alb-waf` attached and identically configured but its ALB is idle, so nothing to write yet — one request closes it. |
+| 2 — orphaned `icc-alb` state | **Security question closed. No stray load balancer exists.** Account-wide enumeration returned seven load balancers: three network (WAF does not apply to NLBs) and four application, every one with a Web ACL. No `icc-alb`. What remains is removing a stale state object. |
+| 3 — alarm inventory unconfirmed | **Confirmed: 20 alarms.** The six-alarm capture predated PR #62's apply; it was a stale reading, not a failed apply. |
+
+**Net effect on this closeout.** Acceptance criterion 1 loses its qualification — the load balancer inventory is now known complete, so "all four ALBs protected" is unconditional rather than a statement about the ALBs we knew of. The logging deliverable goes from 2-of-4 to 4-of-4 configured and 3-of-4 confirmed. Monitoring is fully verified.
+
+**No open security exposure remains in the WAF layer.** The one live exposure on the list is unrelated to WAF: the osTicket portal is served over plain HTTP, blocked on a DNS record only Insight Group can create.
+
+An incidental benefit: chasing finding 2 is what produced the account-wide load balancer enumeration in the first place. Without it, acceptance criterion 1 would still rest on a list of ALBs assembled from the Terraform leaves rather than from AWS.
 
 ---
 
@@ -127,7 +146,23 @@ osticket-alb   WAF=osticket-alb-waf
 
 Note this is **four** ALBs, not the two that existed at SOW signing. `crm-alb` and `osticket-alb` were built after the June closeout and had no WAF until 2026-08-10. They were internet-facing on `0.0.0.0/0` in the interim. Now protected.
 
-The ALB list was enumerated from AWS via `describe-load-balancers`, not read off the Terraform leaves, so an ALB created outside the WAF programme would have shown up. **Qualified by rev 3 finding 2:** read this as "all four *known* ALBs are protected" until the orphaned `icc-alb` state is resolved.
+The ALB list was enumerated from AWS via `describe-load-balancers`, not read off the Terraform leaves, so an ALB created outside the WAF programme would have shown up.
+
+**Confirmed complete.** The account holds seven load balancers:
+
+| Load balancer | Type | WAF |
+|---|---|---|
+| `ingress-alb` | application | `ingress-alb-waf` |
+| `scriptcase-lb` | application | `scriptcase-lb-waf` |
+| `crm-alb` | application | `crm-alb-waf` |
+| `osticket-alb` | application | `osticket-alb-waf` |
+| `sftp-nlb` | network | n/a |
+| `sftp-claro-nlb` | network | n/a |
+| `wazuh-nlb` | network | n/a |
+
+Every application load balancer has a Web ACL. The three NLBs cannot have one — AWS WAF is a layer-7 control and does not attach to Network Load Balancers. Those carry TCP services (SFTP, Wazuh agent traffic), not HTTP, so WAF is not the applicable control; their exposure is managed by security-group scoping.
+
+The first draft of this revision qualified the result as "all four *known* ALBs" pending the orphaned-state question. **That qualification is lifted** — the enumeration is account-wide, so the inventory is known complete.
 
 ### 2. OWASP Top 10 threats blocked by managed rules
 
@@ -166,8 +201,8 @@ As noted at the original closeout, "zero false positives" is unprovable in absol
 | Custom rules for application-specific protection | **Capability delivered, no rules defined — open item 4** |
 | Rate limiting configuration | **Delivered** |
 | AWS WAF Bot Control configuration | **Capability delivered, not enabled — open item 1** |
-| CloudWatch monitoring and alerting setup | **Delivered** (see rev 2). Alarm inventory pending one confirmation — rev 3 finding 3 |
-| WAF logging to S3 | **Delivered for 2 of 4 Web ACLs. Fix in review as PR #69** — rev 3 finding 1. S3-only by design (D2); the SOW's "and CloudWatch Logs" is a deliberate omission on cost and SCP grounds, not a gap |
+| CloudWatch monitoring and alerting setup | **Delivered and verified** — 20 alarms confirmed 2026-08-10 (see rev 2 and rev 3a) |
+| WAF logging to S3 | **Delivered for all 4 Web ACLs** — PR #69 merged and applied 2026-08-10. 3 of 4 confirmed delivering; `osticket-alb-waf` attached and awaiting its first request. S3-only by design (D2); the SOW's "and CloudWatch Logs" is a deliberate omission on cost and SCP grounds, not a gap |
 
 ### Documentation
 
@@ -292,12 +327,13 @@ Copy-paste commands for each of these are in `waf-finish-checklist.md`.
 
 **Nebularis to close — engineering, no client input needed:**
 
-- [ ] **PR #69 merged and applied** — logging enrolled for `crm-alb-waf` and `osticket-alb-waf` (rev 3 finding 1)
-- [ ] **Log delivery re-verified** — all four Web ACLs above zero objects (checklist step 6)
-- [ ] **Alarm inventory confirmed** — 20 alarms, correct namespace and thresholds (rev 3 finding 3, checklist step 6b)
-- [ ] **Orphaned `icc-alb` state resolved** — determine scenario (a) or (b), then clean up (rev 3 finding 2, checklist step 7)
+- [x] **PR #69 merged and applied** — logging enrolled for `crm-alb-waf` and `osticket-alb-waf` (rev 3 finding 1). Applied 2026-08-10.
+- [x] **Alarm inventory confirmed** — 20 alarms (rev 3 finding 3). Confirmed 2026-08-10.
+- [x] **No unprotected load balancer** — account-wide enumeration, 4 of 4 ALBs with a Web ACL, no `icc-alb` (rev 3 finding 2, the material half).
+- [ ] **`osticket-alb-waf` log delivery** — one request against an idle ALB, then re-check. Checklist step 6c. **The last item on the logging deliverable.**
 - [ ] **Dashboard opened and confirmed populating** (last unverified step on acceptance criterion 4)
 - [ ] **Runbook tested** — block/unblock exercise, outcome recorded in `waf-runbook.md`
+- [ ] **Orphaned `icc-alb` state object removed** — state hygiene only, no longer gating. Checklist step 7.
 
 **Requires Insight Group:**
 
@@ -329,16 +365,24 @@ The first 50% was issued on signing per the SOW.
 
 The remaining 50% is contingent on the "50% upon completion" term.
 
-**Nebularis's position, revised at rev 3.** The filtering layer — the substance of the SOW — is deployed and verified across all four internet-facing applications. What rev 2 and rev 3 found were defects in the observability and logging layers around it, plus one piece of state hygiene.
+**Nebularis's position, as at rev 3a.** The filtering layer — the substance of the SOW — is deployed and verified across all four internet-facing applications, and the load balancer inventory it was checked against is now known complete. What rev 2 and rev 3 found were defects in the observability and logging layers around it; both are fixed and re-verified.
 
-We are not going to invoice against a completion claim while a logging deliverable is only two-thirds covered. Our proposal:
+We said at rev 3 that we would not invoice against a completion claim while a logging deliverable was two-thirds covered. That has been closed out:
 
-1. **Nebularis closes its own six items first**, at no additional charge. They are listed under "Nebularis to close" above: PR #69 merged and applied, log delivery re-verified, alarm inventory confirmed, orphaned state resolved, dashboard confirmed, runbook exercised. Estimate: under a day, most of it waiting for a pipeline.
+- Logging now configured on all four Web ACLs, three confirmed delivering, the fourth attached and waiting on its first request.
+- Monitoring verified at 20 alarms.
+- The state-file finding confirmed not to involve a live unprotected endpoint.
+
+**Remaining before we consider the completion claim sound:** the one `osticket-alb-waf` log confirmation, a look at the dashboard, and the runbook exercise. All Nebularis-side, all short.
+
+Proposal unchanged in shape:
+
+1. **Nebularis finishes its own remaining items at no additional charge.** Listed under "Nebularis to close" above.
 2. **Then invoice the remaining 50%**, with the four Insight Group items (Bot Control decision, custom-rules conversations, two training sessions) either delivered or dispositioned in writing.
 
-If Insight Group would rather settle the invoice now against a written commitment covering step 1, that also works. The point is that we are not asking to be paid on completion until the completion claim holds.
+If Insight Group would rather settle now against a written commitment covering step 1, that also works.
 
-The rev 2 monitoring gap and the rev 3 logging gap are not billed as additional work.
+**Neither the rev 2 monitoring gap nor the rev 3 logging gap is billed as additional work.** Nor is the pipeline hardening listed under "Delivered beyond scope" — that work exists because of failures during delivery, and charging for it would be charging to fix our own.
 
 ## Sign-off
 

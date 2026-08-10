@@ -13,14 +13,20 @@ Work top to bottom. Steps marked **[HUMAN]** are conversations or sessions with 
 | Step 3 | Bot Control decision | **Insight Group** |
 | Step 4 | Custom rules review | **Insight Group** (4 owner conversations) |
 | Step 5 | Two training sessions | Both |
-| **Step 6** | **Log delivery for all 4 Web ACLs + alarm inventory** | **Nebularis — closes closeout rev 3 findings 1 and 3** |
-| **Step 7** | **Orphaned `icc-alb` state — possible unprotected public ALB** | **Nebularis — closes closeout rev 3 finding 2** |
+| Step 6 | Log delivery — **mostly done**, one `curl` left (6c) | Nebularis |
+| Step 7 | Orphaned `icc-alb` state — **security question closed**, cleanup left | Nebularis |
 | Step 8 | osTicket HTTPS | Insight Group's DNS admin, then Nebularis |
 | Step 9 | crm / osticket baselines | Nebularis, after a week of data |
 
-Steps 6 and 7 were added after a wider verification round on 2026-08-10 found that two of the four Web ACLs had never delivered a log record, and that an orphaned state file claims 13 live resources. Detail in `waf-verification-report.md`.
+Steps 6 and 7 were added after a wider verification round on 2026-08-10 found that two of the four Web ACLs had never delivered a log record, and that an orphaned state file claims 13 resources. Detail in `waf-verification-report.md`.
 
-> **Priority order if you only have an hour:** step 6, then step 7, then step 1. Those three are the ones where we currently do not know the answer. Everything else is a scheduled conversation or a known quantity.
+**Progress as of 2026-08-10:**
+
+- PR **#69** merged and applied. `crm-alb-waf` logging confirmed working (0 → 1 objects). `osticket-alb-waf` still 0 — its ALB is idle; one `curl` closes it. **Step 6c.**
+- Alarm inventory confirmed: **20**. Step 6b done; the earlier six-alarm reading was stale.
+- Account-wide load balancer enumeration: **7 LBs, 4 ALBs, all four with a Web ACL, no `icc-alb`.** The orphaned state does not correspond to a live unprotected endpoint. Step 7 drops from "possible security exposure" to state cleanup.
+
+> **Priority order if you only have twenty minutes:** step 6c (one `curl`, then wait 5 min), then step 1 (open the dashboard). Those are the only two places where we still do not know the answer. Step 7 is tidying. Steps 2–5 are scheduled work.
 
 ---
 
@@ -38,29 +44,20 @@ Every command block below asserts the account before doing anything. Get this wr
 
 ## Step 0 — Merge the open PRs
 
-**#69 is the only one that plans or applies.** Merge it first so its apply has
-finished before you run step 6.
-
-- [ ] **PR #69** — `waf-logs`: enrol `crm-alb-waf` and `osticket-alb-waf` in logging. **Plans and applies.** Expected plan: `2 to add, 0 to change, 0 to destroy`. Read the plan comment before merging; if it shows any destroy or replace, stop.
-- [ ] **PR #70** — this checklist revision, the verification report, closeout rev 3. Docs only.
+- [x] **PR #69** — `waf-logs`: enrol `crm-alb-waf` and `osticket-alb-waf` in logging. **Merged and applied 2026-08-10.** Plan read `2 to add, 0 to change, 0 to destroy`, as predicted; apply clean.
+- [ ] **PR #70** — this checklist, the verification report, closeout rev 3. Docs only.
 - [ ] **PR #58** — cti-v7 operations docs. Docs only.
 
 ```bash
 R=nebulariscloud/insight-codebase-infrastructure
-
-# Read #69's plan comment first.
-gh pr view 69 --repo "$R" --comments | tail -60
-
-gh pr merge 69 --repo "$R" --squash
 gh pr merge 70 --repo "$R" --squash
 gh pr merge 58 --repo "$R" --squash
 ```
 
-Docs-only PRs yield `any=false` from `detect`, so nothing plans or applies for
-those two.
+Both are docs-only, so `detect` yields `any=false` and nothing plans or applies.
 
-Already merged, listed so the numbering isn't confusing: **#67** (closeout rev 2)
-and **#68** (training material, custom-rules template).
+Already merged, listed so the numbering isn't confusing: **#67** (closeout rev 2),
+**#68** (training material, custom-rules template), **#69** (the logging fix).
 
 ---
 
@@ -422,21 +419,73 @@ for acl in ingress-alb-waf scriptcase-lb-waf crm-alb-waf osticket-alb-waf; do
 done
 ```
 
-- [ ] **PR #69 merged and applied.** Plan should read `2 to add, 0 to change, 0 to destroy`. If it shows a destroy or replace, stop and re-read the PR body — no `ALLOW-DESTROY` is expected for this change.
-- [ ] All four report `dest = arn:aws:s3:::aws-waf-logs-713939170920-us-east-2`
-- [ ] All four report `objects` > 0
+- [x] **PR #69 merged and applied — done 2026-08-10.** Plan read `2 to add, 0 to change, 0 to destroy`, as predicted. Apply clean.
+- [x] All four report `dest = arn:aws:s3:::aws-waf-logs-713939170920-us-east-2`
+- [x] `crm-alb-waf` above zero — moved 0 → 1
+- [ ] `osticket-alb-waf` above zero — **still 0.** See 6c.
 
-`crm-alb-waf` and `osticket-alb-waf` may sit at 0 for a few minutes if their ALBs
-are idle. Generate a request against each and re-run before concluding anything.
+Result after apply:
+
+```
+ingress-alb-waf      objects=28830
+scriptcase-lb-waf    objects=15502
+crm-alb-waf          objects=1     <- was 0
+osticket-alb-waf     objects=0
+```
+
+`crm-alb-waf` going 0 → 1 is the signal that matters: it proves the logging
+config, bucket policy and KMS grant all work for a newly enrolled Web ACL.
+
+### 6c. Force one request through osTicket to close V9
+
+`osticket-alb-waf` is attached and configured identically to `crm-alb-waf`. WAF
+writes an object only after inspecting a request, and that ALB has had none since
+the apply. Almost certainly idle, not broken — but confirm rather than assume.
+
+```bash
+# Plain HTTP: the cert is still PENDING_VALIDATION (step 8).
+curl -sS -o /dev/null -w 'http status: %{http_code}\n' \
+  http://osticket-alb-343594101.us-east-2.elb.amazonaws.com/
+
+sleep 360   # WAF batches to S3 in ~5-minute windows
+
+aws s3 ls \
+  "s3://aws-waf-logs-713939170920-us-east-2/AWSLogs/713939170920/WAFLogs/us-east-2/osticket-alb-waf/" \
+  --recursive | wc -l
+```
+
+- [ ] Count is 1 or more
+
+Any HTTP status is fine — 200, 302, 404, even 503. The only thing being tested is
+that WAF inspected a request and wrote a record.
+
+If it is still 0 ten minutes after a confirmed request, it is a real fault. Next
+steps in that case:
+
+```bash
+arn=$(aws wafv2 list-web-acls --scope REGIONAL --region us-east-2 \
+  --query "WebACLs[?Name=='osticket-alb-waf'].ARN | [0]" --output text)
+aws wafv2 get-logging-configuration --resource-arn "$arn" --region us-east-2
+```
 
 **Then record the result in `waf-verification-record.md` under V9** and flip V9
-from FAIL to Pass in both that file and `waf-verification-report.md`.
+to Pass in both that file and `waf-verification-report.md`.
 
-### 6b. Alarm inventory — 20 expected, currently unconfirmed
+### 6b. Alarm inventory — **DONE 2026-08-10: 20 confirmed**
 
-PR #62 expanded the alarm set from 6 to 20. Internal notes record that as
-verified; a later capture showed only the original 6 names. The two records
-cannot be reconciled, so V8 is recorded as **not verified**. Settle it:
+```
+$ aws cloudwatch describe-alarms --alarm-name-prefix perimeter-waf- \
+    --region us-east-2 --query 'length(MetricAlarms)' --output text
+20
+```
+
+PR #62's apply landed correctly. The six-alarm capture that raised the question
+was a stale reading from before the expansion. V8 is a pass.
+
+- [x] Count is **20**
+
+The namespace / threshold columns are worth eyeballing on the same command output
+when you open the dashboard for step 1, since both come from one call:
 
 ```bash
 ACCT=$(aws sts get-caller-identity --query Account --output text)
@@ -452,13 +501,12 @@ aws cloudwatch describe-alarms --alarm-name-prefix perimeter-waf- \
   --output table
 ```
 
-- [ ] Count is **20** (5 per Web ACL × 4)
 - [ ] Every `Namespace` reads `AWS/WAFV2` — capital `V`, this is the June defect
 - [ ] All four `*-no-metrics` liveness alarms present and `OK`. `OK` here is the meaningful signal: they alarm on *absence*, so `OK` positively confirms metrics are arriving
 - [ ] Thresholds match the baseline: ingress 4000 / 700 / 600 / 100 · scriptcase 600 / 400 / 250 / 100 · crm + osticket on module defaults 600 / 400 / 300 / 100
 
-If the count comes back **6**, the `waf-monitoring` leaf never applied. Its
-original apply was cancelled and re-driven by dispatch; re-drive it again:
+If a future run returns **6**, the `waf-monitoring` leaf did not apply. Its
+original apply was cancelled once and re-driven by dispatch; re-drive it again:
 
 ```bash
 gh workflow run terraform.yml \
@@ -469,19 +517,26 @@ gh workflow run terraform.yml \
 
 - [ ] If re-driven: re-run the inventory command above and confirm 20
 
-**Then record the outcome in `waf-verification-record.md` under V8** and update
-V8 in `waf-verification-report.md`.
+V8 is already recorded as Pass in `waf-verification-record.md` and
+`waf-verification-report.md`.
 
 ---
 
-## Step 7 — Resolve the orphaned `icc-alb` state (possible unprotected public ALB)
+## Step 7 — Clean up the orphaned `icc-alb` state
 
-**Do this before signing off on acceptance criterion 1.** Step 1 concluded "4 of
-4 ALBs protected"; that is only as good as the list of ALBs it was checked
-against.
+> **The security question here is already answered: there is no stray load
+> balancer.** An account-wide enumeration on 2026-08-10 returned seven load
+> balancers — `sftp-nlb`, `sftp-claro-nlb`, `wazuh-nlb` (all network, WAF does not
+> apply) and the four ALBs, every one of which has a Web ACL. No `icc-alb`.
+>
+> That also lifted the "all four *known* ALBs" qualification on acceptance
+> criterion 1. The ALB inventory is now known complete.
+>
+> What is left below is **state hygiene, not exposure.** Do it, but it no longer
+> gates anything.
 
 `crm-alb` was renamed from `icc-alb` in PR #45. The old state object was never
-removed and still claims **13 live resources**:
+removed and still claims **13 resources**:
 
 ```
 s3://lza-terraform-state-547368325532/live/perimeter/icc-alb/terraform.tfstate
@@ -493,35 +548,34 @@ aws_lb_listener.http · aws_lb_listener_rule.{prod_host,dev_host}
 aws_vpc_security_group_{ingress_rule.http,ingress_rule.https,egress_rule.to_targets}
 ```
 
-No leaf on `main` points at it. Two possibilities:
+No leaf on `main` points at it. Three scenarios:
 
-| | Scenario | Implication |
+| | Scenario | Status |
 |---|---|---|
-| **(a)** | Same resources `crm-alb` now manages | Dual-management hazard. No extra cost or exposure. |
-| **(b)** | A separate `icc-alb` ALB is still running | Internet-facing, outside the WAF programme, unmonitored, billing. |
+| **(a)** | Same resources `crm-alb` now manages | Possible. Dual-management hazard — two states claiming one set of resources. No cost, no exposure. |
+| **(b)** | A separate `icc-alb` ALB is still running | **RULED OUT 2026-08-10** — no `icc-alb` in the account. |
+| **(c)** | Resources already gone, state purely stale | Possible. |
 
-### 7a. Which one is it
+### 7a. Which one is it — (a) or (c)
 
-```bash
-ACCT=$(aws sts get-caller-identity --query Account --output text)
-[ "$ACCT" != "713939170920" ] && { echo "WRONG ACCOUNT ($ACCT) — need Perimeter"; exit 1; }
+Already done, for the record:
 
-echo "=== every load balancer AWS knows about ==="
-aws elbv2 describe-load-balancers --region us-east-2 \
-  --query 'LoadBalancers[].[LoadBalancerName,Scheme,Type,DNSName]' --output table
+```
+$ aws elbv2 describe-load-balancers --region us-east-2 \
+    --query 'LoadBalancers[].[LoadBalancerName,Scheme,Type,DNSName]' --output table
 
-echo "=== and their WAF status ==="
-aws elbv2 describe-load-balancers --region us-east-2 \
-  --query 'LoadBalancers[?Type==`application`].LoadBalancerArn' --output text \
-  | tr '\t' '\n' | while read -r arn; do
-      [ -z "$arn" ] && continue
-      acl=$(aws wafv2 get-web-acl-for-resource --resource-arn "$arn" --region us-east-2 \
-        --query 'WebACL.Name' --output text 2>/dev/null || echo "NONE")
-      printf "%-70s WAF=%s\n" "${arn##*/loadbalancer/}" "$acl"
-    done
+sftp-nlb         internet-facing  network      sftp-nlb-34a55ff7c8bc1fe1.elb...
+sftp-claro-nlb   internet-facing  network      sftp-claro-nlb-355d444eae8c5f3a.elb...
+wazuh-nlb        internet-facing  network      wazuh-nlb-c809fdc006300e6f.elb...
+ingress-alb      internet-facing  application  ingress-alb-122459471.us-east-2.elb...
+scriptcase-lb    internet-facing  application  scriptcase-lb-1093571739.us-east-2.elb...
+crm-alb          internet-facing  application  crm-alb-142110994.us-east-2.elb...
+osticket-alb     internet-facing  application  osticket-alb-343594101.us-east-2.elb...
 ```
 
-Then, with credentials that can read the SharedServices state bucket:
+- [x] Enumerated — no `icc-alb`, scenario (b) ruled out
+
+To tell (a) from (c), with credentials that can read the SharedServices state bucket:
 
 ```bash
 ACCT=$(aws sts get-caller-identity --query Account --output text)
@@ -533,7 +587,26 @@ aws s3 cp s3://lza-terraform-state-547368325532/live/perimeter/icc-alb/terraform
 ```
 
 - [ ] Recorded the ALB name / ARN / DNS name from the orphaned state
-- [ ] Compared against the live load balancer list
+- [ ] Compared against `crm-alb-142110994.us-east-2.elb.amazonaws.com` — match means (a), no match means (c)
+
+While in there, since the state also claims a security group and a certificate:
+
+```bash
+ACCT=$(aws sts get-caller-identity --query Account --output text)
+[ "$ACCT" != "713939170920" ] && { echo "WRONG ACCOUNT ($ACCT) — need Perimeter"; exit 1; }
+
+aws ec2 describe-security-groups --region us-east-2 \
+  --filters "Name=group-name,Values=*icc*" \
+  --query 'SecurityGroups[].[GroupId,GroupName,Description]' --output table
+
+aws acm list-certificates --region us-east-2 \
+  --query 'CertificateSummaryList[?contains(DomainName,`icc`)].[CertificateArn,DomainName,Status]' \
+  --output table
+```
+
+- [ ] Noted whether an unmanaged `icc*` security group or certificate is left behind
+
+Neither costs anything unused, but an unmanaged security group in Perimeter is worth knowing about and an unused cert is worth deleting for tidiness.
 
 ### 7b. Act on the answer
 
@@ -563,15 +636,15 @@ running the removal.**
 - [ ] Backup taken
 - [ ] State object and lock digest removed
 
-**Scenario (b)** — an extra load balancer exists. That is a public endpoint
-outside the WAF programme.
+**Scenario (c)** — the ARN does not resolve. The resources are already gone and
+the state is purely stale. Same cleanup as (a).
 
-- [ ] Confirm what it serves and whether any DNS record still points at it
-- [ ] If dead: decommission through the normal PR flow — recreate a minimal `icc-alb` leaf pointing at the existing state, then apply a destroy with explicit `ALLOW-DESTROY` authorisation. Do **not** delete it out of band; that leaves the same orphaned-state problem behind.
-- [ ] If live: it needs a Web ACL immediately. Same pattern as `crm-alb` — `enable_waf = true` plus a `waf-managed` module block.
-
-**Scenario (c)** — the ARN does not resolve at all. The resources are already
-gone and the state is purely stale. Same cleanup as scenario (a).
+**Scenario (b) did not occur.** Retained here in case a similar orphan turns up
+elsewhere: an extra live load balancer would be a public endpoint outside the WAF
+programme, and the response would be to decommission it through the normal PR
+flow — recreate a minimal leaf pointing at the existing state, then apply a
+destroy with explicit `ALLOW-DESTROY`. Never delete it out of band, because that
+leaves the same orphaned-state problem behind.
 
 - [ ] Outcome recorded in `waf-verification-record.md` under V10, and V10 updated in `waf-verification-report.md`
 
@@ -703,8 +776,12 @@ Then set per-ACL thresholds at roughly 1.5–2× observed peak in `terraform/liv
 
 ## Definition of done
 
-SOW is signable when **Steps 1–7** are complete.
+SOW is signable when **Steps 1–6** are complete.
 
-Steps 6 and 7 are in that set, not outside it. Step 6 is part of the SOW logging deliverable, and step 7 gates the claim in acceptance criterion 1 that every public ALB is protected — a claim that is only as good as the list of ALBs it was checked against.
+Step 6 is in that set because it is part of the SOW logging deliverable. It is now one `curl` away (6c).
 
-Steps 8–10 are operational follow-ups that do not gate sign-off, though step 8 is worth prioritising because a public ticket portal is currently served over plain HTTP.
+**Step 7 no longer gates sign-off.** It was in the gating set while it might have been an unprotected public load balancer. The account-wide enumeration ruled that out, so it is state cleanup — do it, but it does not hold up the SOW.
+
+Steps 8–10 are operational follow-ups. Step 8 is worth prioritising because a public ticket portal is currently served over plain HTTP, and that is a live exposure even though it is not a WAF defect.
+
+**Shortest path to signable:** step 6c (one request, wait 5 minutes), step 1 (open the dashboard), step 2 (the ~30 minute runbook exercise). Then the four items that need Insight Group: Bot Control, custom rules, and the two training sessions.
