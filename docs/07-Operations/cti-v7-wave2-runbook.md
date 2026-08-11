@@ -345,6 +345,72 @@ round-trip alike. Only a block-level `dd` onto a blank volume severs it.
 `copy-image` re-encrypts *and* carries every boot attribute and BDM automatically. It
 works same-region, which is what turns this into a two-call chain.
 
+> **For a Windows source, `copy-image` is not merely tidier — the snapshot fallback is
+> unsafe.** AWS's own guidance on creating an AMI from a snapshot says Windows, Red Hat,
+> SUSE and SQL Server AMIs need correct licensing metadata, that `RegisterImage` only
+> *derives* it from the snapshot's metadata when that metadata happens to be present, and
+> that if the resulting AMI's `PlatformDetails` comes out empty or wrong you should
+> **discard the AMI and create it from the instance instead**. Our chain re-encrypts and
+> copies the snapshot twice, so that metadata is exactly what is at risk. WS Aheeva is
+> Windows. Use `copy-image`.
+>
+> Source: [Create an AMI from a snapshot](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/creating-an-ami-ebs.html)
+> — paraphrased; content was rephrased for compliance with licensing restrictions.
+
+> **`ec2:CopyImage` is a separate IAM action from `ec2:CopySnapshot`.** An identity that
+> has been doing snapshot-based migrations may well not have it — this exact wall was hit
+> on 2026-08-07 in the source tenant:
+> ```
+> An error occurred (UnauthorizedOperation) when calling the CopyImage operation:
+> ... is not authorized to perform: ec2:CopyImage on resource: .../ami-000e85490d76316d9
+> because no identity-based policy allows the ec2:CopyImage action.
+> ```
+> Note "no identity-based policy allows" — that is a **missing IAM grant, not an SCP
+> deny** (an SCP would say "explicit deny in a service control policy"). So it is fixed
+> by adding the permission, not by working around a guardrail. Minimum policy for the
+> migrating identity in the **source** tenant:
+> ```json
+> {
+>   "Version": "2012-10-17",
+>   "Statement": [
+>     {
+>       "Sid": "MigrationCopyImage",
+>       "Effect": "Allow",
+>       "Action": [
+>         "ec2:CopyImage",
+>         "ec2:CopySnapshot",
+>         "ec2:CreateTags",
+>         "ec2:ModifyImageAttribute",
+>         "ec2:ModifySnapshotAttribute"
+>       ],
+>       "Resource": "*"
+>     },
+>     {
+>       "Sid": "MigrationKmsKeys",
+>       "Effect": "Allow",
+>       "Action": [
+>         "kms:DescribeKey",
+>         "kms:CreateGrant",
+>         "kms:Decrypt",
+>         "kms:ReEncryptFrom",
+>         "kms:ReEncryptTo",
+>         "kms:GenerateDataKeyWithoutPlaintext"
+>       ],
+>       "Resource": [
+>         "arn:aws:kms:us-east-1:254422596287:key/e861c20e-209b-4a96-a184-10cf2e3c0c0d",
+>         "arn:aws:kms:us-east-1:254422596287:key/6e7aced8-e4e6-4060-8b71-b00099d5412f"
+>       ]
+>     }
+>   ]
+> }
+> ```
+> The two keys are the transfer CMK and the AWS-managed `aws/ebs` key the source volumes
+> sit on. `ec2:CopyImage` alone may be enough if KMS access is already inherited — if the
+> retry then fails on KMS instead, the error will say so plainly.
+>
+> **The already-created image is reusable.** A failure at this step does not invalidate
+> the `create-image` from step 2.1; re-run only the `copy-image`.
+
 ```bash
 # $XFER_KEY = the transfer CMK in the SOURCE tenant. osTicket used
 # e861c20e-209b-4a96-a184-10cf2e3c0c0d — reuse it rather than creating another.
