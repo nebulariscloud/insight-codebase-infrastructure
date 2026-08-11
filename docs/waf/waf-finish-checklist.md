@@ -69,6 +69,45 @@ git ls-tree --name-only insight-remote/main docs/waf/   # expect 12 files
 
 Last unverified item on SOW acceptance criterion 4. The dashboard rendered empty until the namespace fix; nobody has looked since.
 
+### What and where
+
+A **CloudWatch dashboard** named **`perimeter-waf`**, in the **Perimeter** account
+`713939170920`, region **us-east-2**. It is created by
+`terraform/live/perimeter/waf-monitoring` via the `waf-monitoring` module — not by
+LZA, and not something you have to build.
+
+Console path: **CloudWatch → Dashboards → `perimeter-waf`**, or direct:
+
+```
+https://us-east-2.console.aws.amazon.com/cloudwatch/home?region=us-east-2#dashboards/dashboard/perimeter-waf
+```
+
+Make sure the console is in the Perimeter account and us-east-2 before judging it
+empty. Production `395516496764` has no WAF, so from there the dashboard either
+does not appear or renders blank — the exact ambiguity that cost hours on
+2026-08-10.
+
+### What it should show
+
+Four rows, one per Web ACL — `ingress-alb-waf`, `scriptcase-lb-waf`,
+`crm-alb-waf`, `osticket-alb-waf` — plus a rollup row across all four. Each Web
+ACL row has three widgets:
+
+| Widget | Expect |
+|---|---|
+| Traffic: allowed / blocked / counted | A line with real values. `ingress` and `scriptcase` are busiest; `crm` and `osticket` will be sparse but non-zero |
+| Blocks broken down by rule | `AWS-IPReputation` should dominate on `ingress` — roughly 65% of its blocks are scanner noise |
+| Rate-limit single-value panel | **`0` is the correct answer.** The rate-based rule has never triggered |
+
+**The failure mode you are looking for is blank widgets or "No data available"**,
+which is what the whole estate showed from June until the namespace fix. Values —
+including zeros in the rate-limit panels — mean it works.
+
+### Verify from the CLI too
+
+Widgets can look empty for boring reasons (time range set to 1 hour on an idle
+ALB). These commands confirm the underlying data independently:
+
 ```bash
 ACCT=$(aws sts get-caller-identity --query Account --output text)
 [ "$ACCT" != "713939170920" ] && { echo "WRONG ACCOUNT ($ACCT) — need Perimeter"; exit 1; }
@@ -77,6 +116,12 @@ ACCT=$(aws sts get-caller-identity --query Account --output text)
 aws cloudwatch list-dashboards --region us-east-2 \
   --query 'DashboardEntries[?DashboardName==`perimeter-waf`].[DashboardName,LastModified]' \
   --output table
+
+# Are the widgets pointed at the corrected namespace? Must print AWS/WAFV2
+# (capital V) and nothing else. Any AWS/WAFv2 here is the June defect returning.
+aws cloudwatch get-dashboard --dashboard-name perimeter-waf --region us-east-2 \
+  --query 'DashboardBody' --output text \
+  | grep -o 'AWS/WAF[Vv]2' | sort -u
 
 # Every Web ACL returning datapoints? (all four should be > 0)
 for acl in ingress-alb-waf scriptcase-lb-waf crm-alb-waf osticket-alb-waf; do
@@ -91,11 +136,16 @@ for acl in ingress-alb-waf scriptcase-lb-waf crm-alb-waf osticket-alb-waf; do
 done
 ```
 
-- [ ] All four Web ACLs report datapoints > 0
-- [ ] Open the dashboard and eyeball it:
-      https://us-east-2.console.aws.amazon.com/cloudwatch/home?region=us-east-2#dashboards/dashboard/perimeter-waf
+> `date -u -d '2 hours ago'` is GNU. On macOS use `date -u -v-2H`.
 
-`crm-alb-waf` and `osticket-alb-waf` may show 0 briefly if their ALBs are idle — re-run after some traffic.
+- [ ] Dashboard `perimeter-waf` exists
+- [ ] `get-dashboard` prints **only** `AWS/WAFV2` — capital `V`
+- [ ] All four Web ACLs report datapoints > 0
+- [ ] Opened the dashboard in the console and the widgets show values, not "No data available"
+
+`crm-alb-waf` and `osticket-alb-waf` may show 0 briefly if their ALBs are idle — widen the dashboard time range to 3 hours, or re-run after some traffic.
+
+Set the dashboard time range to **3 hours** on first look. The default is often 1 hour, which on the quieter ALBs can be genuinely empty and read as broken.
 
 ---
 
@@ -725,55 +775,168 @@ gh pr create --base main --head feat/osticket-enable-https \
 - [ ] `curl -I https://osticket.insightgrouppr.com/` returns a certificate and a 200/302
 - [ ] Point the hostname at the ALB DNS name if not already
 
-### 8d. osTicket returned HTTP 500 — is the portal actually healthy?
+### 8d. osTicket target group is UNHEALTHY and the ALB is failing open
 
-Found on 2026-08-10 while closing step 6c. Requesting the ALB by its raw DNS name
-returned **500**.
+Found 2026-08-10 while closing step 6c. Not a WAF problem. **Do this before 8c.**
 
-This is not a WAF problem and not a load balancer problem. The `osticket-alb`
-listener is a plain forward to `10.12.1.67:80` with no host-based routing rules
-and no fixed-response default action, so a 500 means a target answered and the
-application errored. An ALB with no healthy targets returns 503; a malformed
-target response returns 502.
+**Measured:**
 
-**Most likely a testing artefact, not a fault.** osTicket stores an absolute
-helpdesk URL in `ost-config.php` and commonly errors when reached on an
-unexpected hostname. The target group health check uses `/` with matcher
-`200,301,302` and sends the target IP as `Host`, so the target can be healthy
-while a wrong-`Host` request 500s. Consistent with what was seen — but unverified.
+```
+$ curl -sS -o /dev/null -w '%{http_code}\n' \
+    http://osticket-alb-343594101.us-east-2.elb.amazonaws.com/
+500                                    # raw ALB DNS name as Host
 
-```bash
-# Same request, correct hostname.
-curl -sS -o /dev/null -w 'correct Host: %{http_code}\n' \
-  -H 'Host: osticket.insightgrouppr.com' \
-  http://osticket-alb-343594101.us-east-2.elb.amazonaws.com/
+$ curl -sS -o /dev/null -w '%{http_code}\n' \
+    -H 'Host: osticket.insightgrouppr.com' \
+    http://osticket-alb-343594101.us-east-2.elb.amazonaws.com/
+301                                    # correct Host
 
-ACCT=$(aws sts get-caller-identity --query Account --output text)
-[ "$ACCT" != "713939170920" ] && { echo "WRONG ACCOUNT ($ACCT) — need Perimeter"; exit 1; }
-
-tg=$(aws elbv2 describe-target-groups --region us-east-2 \
-  --query "TargetGroups[?contains(TargetGroupName,'osticket')].TargetGroupArn | [0]" \
-  --output text)
-aws elbv2 describe-target-health --target-group-arn "$tg" --region us-east-2 \
-  --query 'TargetHealthDescriptions[].[Target.Id,Target.Port,TargetHealth.State,TargetHealth.Reason]' \
-  --output table
+$ aws elbv2 describe-target-health --target-group-arn "$tg" --region us-east-2
+10.12.1.67   unhealthy   Target.ResponseCodeMismatch
 ```
 
-- [ ] Correct-`Host` request returns 200, 301 or 302
-- [ ] Target `10.12.1.67` reports `healthy`
+#### What this means
 
-If both pass, the portal is fine and the 500 was an artefact of testing by IP —
-note it and move on.
+**The target is unhealthy, and it has been serving traffic anyway.**
 
-If the correct-`Host` request also 500s, or the target is unhealthy, it is a real
-osTicket fault and belongs to the migration workstream, not this checklist.
-Starting points: whether Apache/PHP is running on `10.12.1.67`, whether osTicket
-can reach `iccmaindb`, and the PHP error log. Cross-reference
-`.kiro/journal/2026-06-26-aheeva-cluster-migration-plan.md`, which covers the
-osTicket move off Lightsail.
+ALB target group health checks send `Host: <target-ip>:<port>` and **ELBv2 provides
+no way to override that header** — there is no `HealthCheckHost` parameter, so this
+cannot be fixed in the `alb` module. The check requests `/` with matcher
+`200,301,302`; osTicket answers a request on an unrecognised host with 500;
+500 is not in the matcher; `Target.ResponseCodeMismatch`.
 
-Worth settling before step 8c flips HTTPS on — no point publishing a TLS
-endpoint in front of an application returning 500.
+Requests are still being served because of documented ALB behaviour: **when every
+target in a target group is unhealthy, the ALB routes to all of them regardless of
+health status.** Single target, unhealthy, so it fails open. That is why the
+requests above got 500 and 301 rather than the 503 an ALB returns when it has
+healthy targets available but none for this group.
+
+So the portal has been running with **no health gating at all**:
+
+- If osTicket genuinely breaks, the ALB cannot tell and has nowhere to shift traffic.
+- Any future second target would be the only one considered, hiding this one's state.
+- Deregistration-on-failure and instance-replacement logic keyed on target health will misfire.
+
+#### The 301 does not prove the portal works
+
+`enable_https = false`, so `certificate_arn` is empty, so the `alb` module's HTTP
+listener uses a **forward** default action, not a redirect. **The 301 therefore
+came from osTicket, not from the load balancer.** If osTicket is configured with
+an `https://` helpdesk URL it will redirect there — and there is no 443 listener
+on this ALB, so that redirect is a dead end for real users.
+
+Get the redirect target before concluding anything:
+
+```bash
+curl -sSI -H 'Host: osticket.insightgrouppr.com' \
+  http://osticket-alb-343594101.us-east-2.elb.amazonaws.com/ \
+  | grep -i '^location:'
+```
+
+- [ ] Recorded the `Location` value
+
+| `Location` | Meaning |
+|---|---|
+| `https://osticket.insightgrouppr.com/...` | **The portal is effectively down for end users.** The app redirects to HTTPS and this ALB has no HTTPS listener. Fix is step 8 — cert validation, then `enable_https = true`. |
+| `http://osticket.insightgrouppr.com/...` | Benign canonical-host redirect. Portal works. |
+| `.../scp/` or another path on the same scheme and host | Normal osTicket behaviour. Portal works. |
+
+Also confirm whether anyone is actually pointed at this ALB yet:
+
+```bash
+dig +short osticket.insightgrouppr.com
+```
+
+- [ ] Recorded what the hostname resolves to — the ALB, the old Lightsail address, or nothing
+
+If it does not resolve to `osticket-alb-343594101.us-east-2.elb.amazonaws.com`,
+then nobody is using this path yet and none of the above is user-facing. Still
+fix it before cutover.
+
+#### Confirm the cause on the instance
+
+```bash
+ACCT=$(aws sts get-caller-identity --query Account --output text)
+[ "$ACCT" != "395516496764" ] && { echo "WRONG ACCOUNT ($ACCT) — need Production"; exit 1; }
+
+iid=$(aws ec2 describe-instances --region us-east-2 \
+  --filters "Name=private-ip-address,Values=10.12.1.67" \
+  --query 'Reservations[].Instances[].InstanceId' --output text)
+echo "instance: $iid"
+
+cid=$(aws ssm send-command --region us-east-2 \
+  --document-name AWS-RunShellScript \
+  --instance-ids "$iid" \
+  --parameters 'commands=[
+    "echo \"--- as the health check sees it (Host: IP) ---\"",
+    "curl -s -o /dev/null -w \"%{http_code}\\n\" -H \"Host: 10.12.1.67\" http://127.0.0.1/",
+    "echo \"--- as a user sees it ---\"",
+    "curl -s -o /dev/null -w \"%{http_code}\\n\" -H \"Host: osticket.insightgrouppr.com\" http://127.0.0.1/",
+    "echo \"--- does a static file bypass PHP? ---\"",
+    "ls -la /var/www/html/ 2>/dev/null | head -20",
+    "echo \"--- recent errors ---\"",
+    "tail -30 /var/log/apache2/error.log 2>/dev/null || tail -30 /var/log/httpd/error_log 2>/dev/null"
+  ]' \
+  --query 'Command.CommandId' --output text)
+
+sleep 15
+aws ssm get-command-invocation --region us-east-2 \
+  --command-id "$cid" --instance-id "$iid" \
+  --query 'StandardOutputContent' --output text
+```
+
+- [ ] Confirmed the health check path returns a non-matching code when `Host` is the IP
+- [ ] Identified the DocumentRoot
+
+#### The fix
+
+**Not by widening the matcher.** Adding 500 to `health_check_matcher` would make
+the check pass while osTicket is genuinely broken, which is the same class of
+mistake as the `notBreaching` alarms in rev 2 — a monitor that cannot report
+failure.
+
+**Do this instead:** serve a static file that Apache answers for any `Host`,
+bypassing PHP entirely, and point the health check at it.
+
+1. On the instance, create the file in the DocumentRoot:
+
+   ```bash
+   # via SSM, same pattern as above
+   printf 'ok\n' | sudo tee /var/www/html/healthz
+   sudo chmod 644 /var/www/html/healthz
+   curl -s -o /dev/null -w 'healthz as IP host: %{http_code}\n' \
+     -H 'Host: 10.12.1.67' http://127.0.0.1/healthz
+   ```
+
+   Must return **200**. If it returns 500, osTicket's rewrite rules are catching
+   everything and need an exclusion for `/healthz`.
+
+2. Then a one-line Terraform PR — in `terraform/live/perimeter/osticket-alb/terraform.tfvars`:
+
+   ```hcl
+   health_check_path    = "/healthz"
+   health_check_matcher = "200"
+   ```
+
+   Expected plan: in-place update of `aws_lb_target_group`. **No replacement, no
+   destroy** — health check attributes are mutable. If the plan shows a
+   replacement, stop; that would drop the target registration.
+
+3. After apply, re-check:
+
+   ```bash
+   aws elbv2 describe-target-health --target-group-arn "$tg" --region us-east-2 \
+     --query 'TargetHealthDescriptions[].[Target.Id,TargetHealth.State]' --output table
+   ```
+
+- [ ] `/healthz` returns 200 with the IP as `Host`
+- [ ] tfvars PR merged and applied, plan showed an in-place update
+- [ ] Target reports `healthy`
+- [ ] Narrowing `health_check_matcher` to `200` confirmed — no longer accepting 301/302, which were only there to tolerate the redirect
+
+This belongs to the osTicket migration workstream rather than the WAF SOW.
+Cross-reference `.kiro/journal/2026-06-26-aheeva-cluster-migration-plan.md`, which
+covers the move off Lightsail.
 
 ---
 
