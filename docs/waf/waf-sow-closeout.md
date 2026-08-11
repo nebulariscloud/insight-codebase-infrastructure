@@ -37,11 +37,28 @@ All three were chased the same day. Outcomes:
 
 | Finding | Outcome |
 |---|---|
-| 1 — two Web ACLs never logging | **Fixed.** PR #69 merged and applied; plan was `2 to add, 0 to change, 0 to destroy` as predicted. `crm-alb-waf` confirmed working (0 → 1 log objects). `osticket-alb-waf` attached and identically configured but its ALB is idle, so nothing to write yet — one request closes it. |
-| 2 — orphaned `icc-alb` state | **Security question closed. No stray load balancer exists.** Account-wide enumeration returned seven load balancers: three network (WAF does not apply to NLBs) and four application, every one with a Web ACL. No `icc-alb`. What remains is removing a stale state object. |
+| 1 — two Web ACLs never logging | **Fixed and fully verified.** PR #69 merged and applied; plan was `2 to add, 0 to change, 0 to destroy` as predicted. All four Web ACLs now delivering log records: 28830 / 15502 / 1 / 4. |
+| 2 — orphaned `icc-alb` state | **Security question closed. No stray load balancer exists.** Account-wide enumeration returned seven load balancers: three network (WAF does not apply to NLBs) and four application, every one with a Web ACL. No `icc-alb`. Resolved to a destroyed ALB — the state's DNS name `icc-alb-396237492...` differs from the live `crm-alb-142110994...`, so `crm-alb` was rebuilt rather than renamed. The destroy was **partial**: `icc-alb-sg` (`sg-076c916a807936cee`) survives unmanaged. No cost, no exposure; cleanup outstanding. |
 | 3 — alarm inventory unconfirmed | **Confirmed: 20 alarms.** The six-alarm capture predated PR #62's apply; it was a stale reading, not a failed apply. |
 
-**Net effect on this closeout.** Acceptance criterion 1 loses its qualification — the load balancer inventory is now known complete, so "all four ALBs protected" is unconditional rather than a statement about the ALBs we knew of. The logging deliverable goes from 2-of-4 to 4-of-4 configured and 3-of-4 confirmed. Monitoring is fully verified.
+**Net effect on this closeout.** Acceptance criterion 1 loses its qualification — the load balancer inventory is now known complete, so "all four ALBs protected" is unconditional rather than a statement about the ALBs we knew of. The logging deliverable goes from 2-of-4 to **4-of-4 configured and confirmed delivering**. Monitoring is fully verified.
+
+**All three rev 3 findings are closed.** What remains on the Nebularis side is two verification steps that were never failures — opening the dashboard, and exercising the runbook — plus removal of a stale state object.
+
+**One finding outside SOW scope, recorded because it surfaced during this work and matters more than anything left inside scope.**
+
+The forced request that closed the logging check returned HTTP **500** from osTicket. Chased down, it turned out to be two separate problems:
+
+1. **The osTicket target group has been unhealthy the entire time** (`Target.ResponseCodeMismatch`), and the load balancer has been serving traffic anyway. ALB health checks address the target by IP, ELBv2 offers no way to set the hostname they send, and osTicket answers an unrecognised host with 500 — outside the configured `200,301,302` matcher. Traffic still flowed because when every target in a group is unhealthy the ALB routes to all of them regardless. One target, so it failed open, silently.
+2. **osTicket redirects to `https://osticket.insightgrouppr.com/`, and the load balancer has no HTTPS listener** — `enable_https = false`, so no certificate, so no port-443 listener. Every browser following that redirect reaches a closed port. **The portal is unusable through this load balancer.**
+
+**Whether it is a live outage depends on one DNS lookup**, still outstanding. If `osticket.insightgrouppr.com` resolves to the load balancer, the help desk is down now. If it still resolves to the pre-migration Lightsail host, it is not an outage — but the migration has not cut over, and `osticket-alb-waf` is therefore not yet in front of real user traffic.
+
+**This is not a WAF defect.** The Web ACL inspects and logs that traffic correctly, which acceptance criterion 1 and the logging verification both confirm. But it changes the priority of one item this document previously listed as an operational follow-up: **the ACM validation CNAME is now on the critical path.** No certificate means no HTTPS listener, and no HTTPS listener means the redirect cannot land. That record can only be created by Insight Group's DNS administrator.
+
+Full write-up, including stopgaps if the portal must work before the certificate lands, at step 8d of `waf-finish-checklist.md`. The health-check fix is a static file the web server answers for any hostname — deliberately **not** widening the accepted status codes to include 500, which would make the check pass while osTicket was genuinely broken and repeat the rev 2 mistake of a monitor that cannot report failure.
+
+Belongs to the osTicket migration workstream rather than this SOW.
 
 **No open security exposure remains in the WAF layer.** The one live exposure on the list is unrelated to WAF: the osTicket portal is served over plain HTTP, blocked on a DNS record only Insight Group can create.
 
@@ -202,7 +219,7 @@ As noted at the original closeout, "zero false positives" is unprovable in absol
 | Rate limiting configuration | **Delivered** |
 | AWS WAF Bot Control configuration | **Capability delivered, not enabled — open item 1** |
 | CloudWatch monitoring and alerting setup | **Delivered and verified** — 20 alarms confirmed 2026-08-10 (see rev 2 and rev 3a) |
-| WAF logging to S3 | **Delivered for all 4 Web ACLs** — PR #69 merged and applied 2026-08-10. 3 of 4 confirmed delivering; `osticket-alb-waf` attached and awaiting its first request. S3-only by design (D2); the SOW's "and CloudWatch Logs" is a deliberate omission on cost and SCP grounds, not a gap |
+| WAF logging to S3 | **Delivered and verified for all 4 Web ACLs** — PR #69 merged and applied 2026-08-10; all four confirmed delivering log records. S3-only by design (D2); the SOW's "and CloudWatch Logs" is a deliberate omission on cost and SCP grounds, not a gap |
 
 ### Documentation
 
@@ -330,10 +347,11 @@ Copy-paste commands for each of these are in `waf-finish-checklist.md`.
 - [x] **PR #69 merged and applied** — logging enrolled for `crm-alb-waf` and `osticket-alb-waf` (rev 3 finding 1). Applied 2026-08-10.
 - [x] **Alarm inventory confirmed** — 20 alarms (rev 3 finding 3). Confirmed 2026-08-10.
 - [x] **No unprotected load balancer** — account-wide enumeration, 4 of 4 ALBs with a Web ACL, no `icc-alb` (rev 3 finding 2, the material half).
-- [ ] **`osticket-alb-waf` log delivery** — one request against an idle ALB, then re-check. Checklist step 6c. **The last item on the logging deliverable.**
+- [x] **Log delivery verified on all four Web ACLs** — 28830 / 15502 / 1 / 4. **The logging deliverable is closed.**
 - [ ] **Dashboard opened and confirmed populating** (last unverified step on acceptance criterion 4)
 - [ ] **Runbook tested** — block/unblock exercise, outcome recorded in `waf-runbook.md`
 - [ ] **Orphaned `icc-alb` state object removed** — state hygiene only, no longer gating. Checklist step 7.
+- [ ] **osTicket portal fixed** — not a WAF item, but the most serious thing found during this work. Target group unhealthy behind a fail-open load balancer, and a redirect to an HTTPS listener that does not exist. Checklist step 8d. **Blocked in part on the client-side validation CNAME.**
 
 **Requires Insight Group:**
 
@@ -367,13 +385,13 @@ The remaining 50% is contingent on the "50% upon completion" term.
 
 **Nebularis's position, as at rev 3a.** The filtering layer — the substance of the SOW — is deployed and verified across all four internet-facing applications, and the load balancer inventory it was checked against is now known complete. What rev 2 and rev 3 found were defects in the observability and logging layers around it; both are fixed and re-verified.
 
-We said at rev 3 that we would not invoice against a completion claim while a logging deliverable was two-thirds covered. That has been closed out:
+We said at rev 3 that we would not invoice against a completion claim while a logging deliverable was two-thirds covered. That objection is now fully discharged:
 
-- Logging now configured on all four Web ACLs, three confirmed delivering, the fourth attached and waiting on its first request.
-- Monitoring verified at 20 alarms.
-- The state-file finding confirmed not to involve a live unprotected endpoint.
+- **Logging configured and confirmed delivering on all four Web ACLs.**
+- **Monitoring verified** at 20 alarms on the corrected namespace.
+- **The state-file finding confirmed not to involve a live unprotected endpoint**, and the load balancer inventory is now known complete.
 
-**Remaining before we consider the completion claim sound:** the one `osticket-alb-waf` log confirmation, a look at the dashboard, and the runbook exercise. All Nebularis-side, all short.
+**Remaining before we consider the completion claim sound:** a look at the dashboard and the runbook exercise. Both Nebularis-side, both short, and neither is a known failure.
 
 Proposal unchanged in shape:
 

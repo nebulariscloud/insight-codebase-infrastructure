@@ -13,20 +13,34 @@ Work top to bottom. Steps marked **[HUMAN]** are conversations or sessions with 
 | Step 3 | Bot Control decision | **Insight Group** |
 | Step 4 | Custom rules review | **Insight Group** (4 owner conversations) |
 | Step 5 | Two training sessions | Both |
-| Step 6 | Log delivery — **mostly done**, one `curl` left (6c) | Nebularis |
+| ~~Step 6~~ | ~~Log delivery + alarm inventory~~ | **DONE 2026-08-10** |
 | Step 7 | Orphaned `icc-alb` state — **security question closed**, cleanup left | Nebularis |
-| Step 8 | osTicket HTTPS | Insight Group's DNS admin, then Nebularis |
+| Step 8 | osTicket HTTPS, plus **8d: the HTTP 500** | Insight Group's DNS admin, then Nebularis |
 | Step 9 | crm / osticket baselines | Nebularis, after a week of data |
 
 Steps 6 and 7 were added after a wider verification round on 2026-08-10 found that two of the four Web ACLs had never delivered a log record, and that an orphaned state file claims 13 resources. Detail in `waf-verification-report.md`.
 
-**Progress as of 2026-08-10:**
+**Progress as of 2026-08-10 — everything with an unknown answer is now settled:**
 
-- PR **#69** merged and applied. `crm-alb-waf` logging confirmed working (0 → 1 objects). `osticket-alb-waf` still 0 — its ALB is idle; one `curl` closes it. **Step 6c.**
-- Alarm inventory confirmed: **20**. Step 6b done; the earlier six-alarm reading was stale.
-- Account-wide load balancer enumeration: **7 LBs, 4 ALBs, all four with a Web ACL, no `icc-alb`.** The orphaned state does not correspond to a live unprotected endpoint. Step 7 drops from "possible security exposure" to state cleanup.
+- **Step 6 complete.** PR **#69** merged and applied. All four Web ACLs delivering log records: 28830 / 15502 / 1 / 4. The SOW logging deliverable covers every protected resource.
+- **Alarm inventory: 20.** The earlier six-alarm reading was stale, from before #62's apply.
+- **Account-wide load balancer enumeration: 7 LBs, 4 ALBs, all four with a Web ACL, no `icc-alb`.** The orphaned state does not correspond to a live unprotected endpoint. Step 7 drops from "possible security exposure" to state cleanup.
+- **PRs #58, #69 and #70 all merged**; nothing open.
+- **Step 1: everything checkable by command has passed.** Dashboard exists, body references only `AWS/WAFV2`, all four Web ACLs returning datapoints. Only the console eyeball is left.
+- **Step 7 resolved to scenario (c)** — the `icc-alb` ALB is gone, so nothing was running unprotected. But the destroy was **partial**: `icc-alb-sg` (`sg-076c916a807936cee`) survives, unmanaged. Delete the SG before the state object, since the state is the only record of what `icc-alb` consisted of.
 
-> **Priority order if you only have twenty minutes:** step 6c (one `curl`, then wait 5 min), then step 1 (open the dashboard). Those are the only two places where we still do not know the answer. Step 7 is tidying. Steps 2–5 are scheduled work.
+> ### ⚠️ osTicket is broken through the ALB — step 8d
+>
+> Not a WAF defect, but the most serious thing on this list.
+>
+> - The target group has been **unhealthy** the whole time (`Target.ResponseCodeMismatch`); the ALB has been failing open, so nobody noticed.
+> - osTicket **301s to `https://osticket.insightgrouppr.com/`**, and this ALB has **no 443 listener** because `enable_https = false`. Every browser following that redirect hits a closed port.
+>
+> **This puts the ACM validation CNAME in step 8a on the critical path.** It was previously filed as a cosmetic follow-up. Without the cert there is no 443 listener, and without the listener the redirect has nowhere to land.
+>
+> Whether it is a *live* outage depends on what `osticket.insightgrouppr.com` resolves to — see step 8d.
+
+**Priority order:** step 8d (finish the DNS check, then decide urgency), then step 1 (open the dashboard, last item on acceptance criterion 4), then step 2 (the ~30 minute runbook exercise). Step 7 is tidying. Steps 3–5 need Insight Group.
 
 ---
 
@@ -44,26 +58,67 @@ Every command block below asserts the account before doing anything. Get this wr
 
 ## Step 0 — Merge the open PRs
 
-- [x] **PR #69** — `waf-logs`: enrol `crm-alb-waf` and `osticket-alb-waf` in logging. **Merged and applied 2026-08-10.** Plan read `2 to add, 0 to change, 0 to destroy`, as predicted; apply clean.
-- [ ] **PR #70** — this checklist, the verification report, closeout rev 3. Docs only.
-- [ ] **PR #58** — cti-v7 operations docs. Docs only.
+**All merged as of 2026-08-10. Nothing open.**
+
+- [x] **PR #69** — `waf-logs`: enrol `crm-alb-waf` and `osticket-alb-waf` in logging. Plan read `2 to add, 0 to change, 0 to destroy`, as predicted; apply clean.
+- [x] **PR #70** — verification report, closeout rev 3, checklist steps 6 and 7.
+- [x] **PR #58** — cti-v7 operations docs.
+
+Earlier in the sequence, listed so the numbering isn't confusing: **#67** (closeout
+rev 2), **#68** (training material, custom-rules template).
+
+Verified on `main` rather than trusted from the merge — #67 once merged at a stale
+head and silently dropped a file:
 
 ```bash
-R=nebulariscloud/insight-codebase-infrastructure
-gh pr merge 70 --repo "$R" --squash
-gh pr merge 58 --repo "$R" --squash
+git fetch insight-remote main
+git ls-tree --name-only insight-remote/main docs/waf/   # expect 12 files
 ```
-
-Both are docs-only, so `detect` yields `any=false` and nothing plans or applies.
-
-Already merged, listed so the numbering isn't confusing: **#67** (closeout rev 2),
-**#68** (training material, custom-rules template), **#69** (the logging fix).
 
 ---
 
 ## Step 1 — Confirm the dashboard populates
 
 Last unverified item on SOW acceptance criterion 4. The dashboard rendered empty until the namespace fix; nobody has looked since.
+
+### What and where
+
+A **CloudWatch dashboard** named **`perimeter-waf`**, in the **Perimeter** account
+`713939170920`, region **us-east-2**. It is created by
+`terraform/live/perimeter/waf-monitoring` via the `waf-monitoring` module — not by
+LZA, and not something you have to build.
+
+Console path: **CloudWatch → Dashboards → `perimeter-waf`**, or direct:
+
+```
+https://us-east-2.console.aws.amazon.com/cloudwatch/home?region=us-east-2#dashboards/dashboard/perimeter-waf
+```
+
+Make sure the console is in the Perimeter account and us-east-2 before judging it
+empty. Production `395516496764` has no WAF, so from there the dashboard either
+does not appear or renders blank — the exact ambiguity that cost hours on
+2026-08-10.
+
+### What it should show
+
+Four rows, one per Web ACL — `ingress-alb-waf`, `scriptcase-lb-waf`,
+`crm-alb-waf`, `osticket-alb-waf` — plus a rollup row across all four. Each Web
+ACL row has three widgets:
+
+| Widget | Expect |
+|---|---|
+| Traffic: allowed / blocked / counted | A line with real values. `ingress` and `scriptcase` are busiest; `crm` and `osticket` will be sparse but non-zero |
+| Blocks broken down by rule | `AWS-IPReputation` should dominate on `ingress` — roughly 65% of its blocks are scanner noise |
+| Rate-limit single-value panel | **`0` is the correct answer.** The rate-based rule has never triggered |
+
+**The failure mode you are looking for is blank widgets or "No data available"**,
+which is what the whole estate showed from June until the namespace fix. Values —
+including zeros in the rate-limit panels — mean it works.
+
+### Verify from the CLI too
+
+Widgets can look empty for boring reasons (time range set to 1 hour on an idle
+ALB). These commands confirm the underlying data independently:
 
 ```bash
 ACCT=$(aws sts get-caller-identity --query Account --output text)
@@ -73,6 +128,12 @@ ACCT=$(aws sts get-caller-identity --query Account --output text)
 aws cloudwatch list-dashboards --region us-east-2 \
   --query 'DashboardEntries[?DashboardName==`perimeter-waf`].[DashboardName,LastModified]' \
   --output table
+
+# Are the widgets pointed at the corrected namespace? Must print AWS/WAFV2
+# (capital V) and nothing else. Any AWS/WAFv2 here is the June defect returning.
+aws cloudwatch get-dashboard --dashboard-name perimeter-waf --region us-east-2 \
+  --query 'DashboardBody' --output text \
+  | grep -o 'AWS/WAF[Vv]2' | sort -u
 
 # Every Web ACL returning datapoints? (all four should be > 0)
 for acl in ingress-alb-waf scriptcase-lb-waf crm-alb-waf osticket-alb-waf; do
@@ -87,11 +148,21 @@ for acl in ingress-alb-waf scriptcase-lb-waf crm-alb-waf osticket-alb-waf; do
 done
 ```
 
-- [ ] All four Web ACLs report datapoints > 0
-- [ ] Open the dashboard and eyeball it:
-      https://us-east-2.console.aws.amazon.com/cloudwatch/home?region=us-east-2#dashboards/dashboard/perimeter-waf
+> `date -u -d '2 hours ago'` is GNU. On macOS use `date -u -v-2H`.
 
-`crm-alb-waf` and `osticket-alb-waf` may show 0 briefly if their ALBs are idle — re-run after some traffic.
+- [x] Dashboard `perimeter-waf` exists — `LastModified 2026-08-10T18:11:59`
+- [x] `get-dashboard` prints **only** `AWS/WAFV2` — confirmed 2026-08-10, single line of output, no lowercase-`v` variant anywhere in the body
+- [x] All four Web ACLs report datapoints > 0 — 36 / 19 / 3 / 5
+- [ ] Opened the dashboard in the console and the widgets show values, not "No data available"
+
+**Only the console eyeball is left on this step.** Everything checkable by command
+has passed, which means if the widgets *do* render empty it is a console or
+time-range issue, not a data problem — set the range to 3 hours before concluding
+anything.
+
+`crm-alb-waf` and `osticket-alb-waf` may show 0 briefly if their ALBs are idle — widen the dashboard time range to 3 hours, or re-run after some traffic.
+
+Set the dashboard time range to **3 hours** on first look. The default is often 1 hour, which on the quieter ALBs can be genuinely empty and read as broken.
 
 ---
 
@@ -422,7 +493,7 @@ done
 - [x] **PR #69 merged and applied — done 2026-08-10.** Plan read `2 to add, 0 to change, 0 to destroy`, as predicted. Apply clean.
 - [x] All four report `dest = arn:aws:s3:::aws-waf-logs-713939170920-us-east-2`
 - [x] `crm-alb-waf` above zero — moved 0 → 1
-- [ ] `osticket-alb-waf` above zero — **still 0.** See 6c.
+- [x] `osticket-alb-waf` above zero — **4 objects after 6c**
 
 Result after apply:
 
@@ -430,17 +501,20 @@ Result after apply:
 ingress-alb-waf      objects=28830
 scriptcase-lb-waf    objects=15502
 crm-alb-waf          objects=1     <- was 0
-osticket-alb-waf     objects=0
+osticket-alb-waf     objects=4     <- was 0, after the forced request in 6c
 ```
 
 `crm-alb-waf` going 0 → 1 is the signal that matters: it proves the logging
 config, bucket policy and KMS grant all work for a newly enrolled Web ACL.
 
-### 6c. Force one request through osTicket to close V9
+**Step 6 is complete. The SOW logging deliverable now covers all four protected
+resources.**
 
-`osticket-alb-waf` is attached and configured identically to `crm-alb-waf`. WAF
-writes an object only after inspecting a request, and that ALB has had none since
-the apply. Almost certainly idle, not broken — but confirm rather than assume.
+### 6c. Force one request through osTicket — **DONE 2026-08-10**
+
+`osticket-alb-waf` was attached and configured identically to `crm-alb-waf`, but
+WAF writes an object only after inspecting a request and that ALB had had none
+since the apply. Confirmed rather than assumed:
 
 ```bash
 # Plain HTTP: the cert is still PENDING_VALIDATION (step 8).
@@ -454,22 +528,23 @@ aws s3 ls \
   --recursive | wc -l
 ```
 
-- [ ] Count is 1 or more
+Result:
 
-Any HTTP status is fine — 200, 302, 404, even 503. The only thing being tested is
-that WAF inspected a request and wrote a record.
-
-If it is still 0 ten minutes after a confirmed request, it is a real fault. Next
-steps in that case:
-
-```bash
-arn=$(aws wafv2 list-web-acls --scope REGIONAL --region us-east-2 \
-  --query "WebACLs[?Name=='osticket-alb-waf'].ARN | [0]" --output text)
-aws wafv2 get-logging-configuration --resource-arn "$arn" --region us-east-2
+```
+http status: 500
+4
 ```
 
-**Then record the result in `waf-verification-record.md` under V9** and flip V9
-to Pass in both that file and `waf-verification-report.md`.
+- [x] Count is 1 or more — **4**
+
+Any HTTP status proves the point. 200, 302, 404 or 500 all mean WAF inspected the
+request and wrote a record, which is the only thing this step tests.
+
+V9 is recorded as Pass in `waf-verification-record.md` and
+`waf-verification-report.md`.
+
+**The `500` is a separate matter — see step 8d.** It is not a WAF result and does
+not affect this step, but it should not be ignored.
 
 ### 6b. Alarm inventory — **DONE 2026-08-10: 20 confirmed**
 
@@ -552,9 +627,9 @@ No leaf on `main` points at it. Three scenarios:
 
 | | Scenario | Status |
 |---|---|---|
-| **(a)** | Same resources `crm-alb` now manages | Possible. Dual-management hazard — two states claiming one set of resources. No cost, no exposure. |
+| **(a)** | Same resources `crm-alb` now manages | **RULED OUT 2026-08-10** — the state's ALB DNS name is `icc-alb-396237492...`, not `crm-alb-142110994...`. Different load balancer; `crm-alb` was rebuilt, not renamed in place. |
 | **(b)** | A separate `icc-alb` ALB is still running | **RULED OUT 2026-08-10** — no `icc-alb` in the account. |
-| **(c)** | Resources already gone, state purely stale | Possible. |
+| **(c)** | Resources already gone, state purely stale | **CONFIRMED** — but the destroy was partial. `icc-alb-sg` (`sg-076c916a807936cee`) survives, unmanaged. |
 
 ### 7a. Which one is it — (a) or (c)
 
@@ -586,29 +661,104 @@ aws s3 cp s3://lza-terraform-state-547368325532/live/perimeter/icc-alb/terraform
   | jq -r '.resources[] | select(.type=="aws_lb") | .instances[].attributes | "\(.name)  \(.arn)  \(.dns_name)"'
 ```
 
-- [ ] Recorded the ALB name / ARN / DNS name from the orphaned state
-- [ ] Compared against `crm-alb-142110994.us-east-2.elb.amazonaws.com` — match means (a), no match means (c)
+**Measured 2026-08-10:**
 
-While in there, since the state also claims a security group and a certificate:
+```
+icc-alb  icc-alb-396237492.us-east-2.elb.amazonaws.com
+```
+
+- [x] Recorded the ALB name / DNS name from the orphaned state
+- [x] Compared against the live list
+
+**This is scenario (c), with a wrinkle.** `icc-alb-396237492...` is a *different*
+DNS name from `crm-alb-142110994...`, so this was never the same load balancer
+under a new name — `crm-alb` was rebuilt rather than renamed in place. And
+`describe-load-balancers` shows no `icc-alb`, so that ALB is gone.
+
+**But not everything in the state is gone:**
+
+```
+$ aws ec2 describe-security-groups --region us-east-2 \
+    --filters "Name=group-name,Values=*icc*" \
+    --query 'SecurityGroups[].[GroupId,GroupName]' --output table
+sg-076c916a807936cee   icc-alb-sg          <- still exists, unmanaged
+
+$ aws acm list-certificates --region us-east-2 \
+    --query 'CertificateSummaryList[?contains(DomainName,`icc`)]...'
+(empty)                                    <- no cert with 'icc' in the domain
+```
+
+So the destroy that removed the ALB left `icc-alb-sg` behind. That is consistent
+with a partial destroy: security groups cannot be deleted while an ENI still
+references them, so it very likely failed on a dependency at the time and was
+never revisited.
+
+- [x] Noted the leftovers — `sg-076c916a807936cee` (`icc-alb-sg`) survives
+
+#### Before deleting anything: is that security group actually unused?
+
+An unused security group costs nothing, but deleting one that is still referenced
+breaks things silently. Two things reference a security group: network interfaces
+that use it, and **rules in other security groups that allow traffic from it.**
+The second is the one people forget.
 
 ```bash
 ACCT=$(aws sts get-caller-identity --query Account --output text)
 [ "$ACCT" != "713939170920" ] && { echo "WRONG ACCOUNT ($ACCT) — need Perimeter"; exit 1; }
 
-aws ec2 describe-security-groups --region us-east-2 \
-  --filters "Name=group-name,Values=*icc*" \
-  --query 'SecurityGroups[].[GroupId,GroupName,Description]' --output table
+SG=sg-076c916a807936cee
 
-aws acm list-certificates --region us-east-2 \
-  --query 'CertificateSummaryList[?contains(DomainName,`icc`)].[CertificateArn,DomainName,Status]' \
+echo "=== network interfaces using it (expect none) ==="
+aws ec2 describe-network-interfaces --region us-east-2 \
+  --filters "Name=group-id,Values=$SG" \
+  --query 'NetworkInterfaces[].[NetworkInterfaceId,Description,Status]' --output table
+
+echo "=== other security groups whose rules reference it (expect none) ==="
+aws ec2 describe-security-groups --region us-east-2 \
+  --query "SecurityGroups[?IpPermissions[?UserIdGroupPairs[?GroupId=='$SG']] || IpPermissionsEgress[?UserIdGroupPairs[?GroupId=='$SG']]].[GroupId,GroupName]" \
   --output table
 ```
 
-- [ ] Noted whether an unmanaged `icc*` security group or certificate is left behind
+- [ ] No network interfaces
+- [ ] No other security group references it in a rule
 
-Neither costs anything unused, but an unmanaged security group in Perimeter is worth knowing about and an unused cert is worth deleting for tidiness.
+The cert also deserves a wider look — the state resource was named
+`aws_acm_certificate.icc`, but the *domain* on it may not contain the string
+`icc`, so the filter above could miss it:
+
+```bash
+aws acm list-certificates --region us-east-2 \
+  --query 'CertificateSummaryList[].[CertificateArn,DomainName,Status,InUse]' --output table
+```
+
+- [ ] Accounted for every certificate listed; noted any unused one left over from `icc-alb`
+
+An unused ACM certificate is free and harmless. Worth deleting for tidiness, but
+**never delete one that reports `InUse: true`.**
 
 ### 7b. Act on the answer
+
+**Confirmed path for this case: scenario (c).** The ALB is gone. Delete the
+orphaned security group first, *then* the state object — in that order, because
+the state file is the only remaining record of what `icc-alb` consisted of.
+
+```bash
+ACCT=$(aws sts get-caller-identity --query Account --output text)
+[ "$ACCT" != "713939170920" ] && { echo "WRONG ACCOUNT ($ACCT) — need Perimeter"; exit 1; }
+
+# Only after both reference checks above came back empty.
+aws ec2 delete-security-group --group-id sg-076c916a807936cee --region us-east-2
+```
+
+If that returns `DependencyViolation`, something still references it — go back to
+the reference checks rather than forcing it.
+
+- [ ] `sg-076c916a807936cee` deleted, or the blocking dependency identified
+
+Then the state object, per the scenario (a) commands below — the cleanup is
+identical.
+
+---
 
 **Scenario (a)** — the ARN belongs to the ALB now named `crm-alb`, and no extra
 load balancer exists. Nothing is running unprotected. Remove the stale state so
@@ -717,6 +867,214 @@ gh pr create --base main --head feat/osticket-enable-https \
 - [ ] `curl -I https://osticket.insightgrouppr.com/` returns a certificate and a 200/302
 - [ ] Point the hostname at the ALB DNS name if not already
 
+### 8d. osTicket target group is UNHEALTHY and the ALB is failing open
+
+Found 2026-08-10 while closing step 6c. Not a WAF problem. **Do this before 8c.**
+
+**Measured:**
+
+```
+$ curl -sS -o /dev/null -w '%{http_code}\n' \
+    http://osticket-alb-343594101.us-east-2.elb.amazonaws.com/
+500                                    # raw ALB DNS name as Host
+
+$ curl -sS -o /dev/null -w '%{http_code}\n' \
+    -H 'Host: osticket.insightgrouppr.com' \
+    http://osticket-alb-343594101.us-east-2.elb.amazonaws.com/
+301                                    # correct Host
+
+$ aws elbv2 describe-target-health --target-group-arn "$tg" --region us-east-2
+10.12.1.67   unhealthy   Target.ResponseCodeMismatch
+```
+
+#### What this means
+
+**The target is unhealthy, and it has been serving traffic anyway.**
+
+ALB target group health checks send `Host: <target-ip>:<port>` and **ELBv2 provides
+no way to override that header** — there is no `HealthCheckHost` parameter, so this
+cannot be fixed in the `alb` module. The check requests `/` with matcher
+`200,301,302`; osTicket answers a request on an unrecognised host with 500;
+500 is not in the matcher; `Target.ResponseCodeMismatch`.
+
+Requests are still being served because of documented ALB behaviour: **when every
+target in a target group is unhealthy, the ALB routes to all of them regardless of
+health status.** Single target, unhealthy, so it fails open. That is why the
+requests above got 500 and 301 rather than the 503 an ALB returns when it has
+healthy targets available but none for this group.
+
+So the portal has been running with **no health gating at all**:
+
+- If osTicket genuinely breaks, the ALB cannot tell and has nowhere to shift traffic.
+- Any future second target would be the only one considered, hiding this one's state.
+- Deregistration-on-failure and instance-replacement logic keyed on target health will misfire.
+
+#### The 301 does not prove the portal works
+
+`enable_https = false`, so `certificate_arn` is empty, so the `alb` module's HTTP
+listener uses a **forward** default action, not a redirect. **The 301 therefore
+came from osTicket, not from the load balancer.** If osTicket is configured with
+an `https://` helpdesk URL it will redirect there — and there is no 443 listener
+on this ALB, so that redirect is a dead end for real users.
+
+**Measured 2026-08-10 — this is the bad branch:**
+
+```bash
+$ curl -sSI -H 'Host: osticket.insightgrouppr.com' \
+    http://osticket-alb-343594101.us-east-2.elb.amazonaws.com/ | grep -i '^location:'
+Location: https://osticket.insightgrouppr.com/
+```
+
+- [x] Recorded the `Location` value
+
+**osTicket redirects to HTTPS, and this ALB has no HTTPS listener.** `enable_https
+= false` → `certificate_arn` empty → the `alb` module creates no `aws_lb_listener`
+on 443. The request chain for a real user is:
+
+```
+GET http://osticket.insightgrouppr.com/
+  -> ALB :80 forwards to 10.12.1.67:80
+  -> osTicket 301 -> https://osticket.insightgrouppr.com/
+  -> ALB :443  ... no listener. Connection refused.
+```
+
+**The portal is unusable through this ALB.** Not degraded — unusable, for every
+request that follows the redirect, which is every browser.
+
+#### Does that mean it is down right now? Depends on DNS
+
+```bash
+# `dig` is not installed on stock macOS shells. Any of these works:
+nslookup osticket.insightgrouppr.com
+
+# or, no external tooling:
+python3 -c "import socket,sys
+h='osticket.insightgrouppr.com'
+try:
+    print(socket.gethostbyname_ex(h))
+except Exception as e:
+    print('does not resolve:', e)"
+
+# or via DNS-over-HTTPS, which also shows the record type:
+curl -s -H 'accept: application/dns-json' \
+  'https://cloudflare-dns.com/dns-query?name=osticket.insightgrouppr.com&type=CNAME' | jq .
+```
+
+- [ ] Recorded what the hostname resolves to
+
+| Resolves to | Situation |
+|---|---|
+| `osticket-alb-343594101.us-east-2.elb.amazonaws.com` | **Live outage.** Users get a redirect to a port with no listener. Fix is urgent — see below. |
+| The old Lightsail address | Not an outage, but **the migration has not cut over.** The WAF is protecting an ALB nobody is using, so `osticket-alb-waf` is not in front of real user traffic yet. Fix before cutover. |
+| Nothing / NXDOMAIN | Nobody can reach it by hostname at all. Same as above — fix before cutover. |
+
+**Either way this is now blocking**, and it changes the priority of one item that
+was previously filed as cosmetic: **the ACM validation CNAME in step 8a is on the
+critical path.** Without the certificate there is no 443 listener, and without the
+443 listener osTicket's redirect has nowhere to land.
+
+#### If DNS points at the ALB and the portal is down now
+
+The correct fix is step 8 — get the cert validated, then `enable_https = true`.
+That needs Insight Group's DNS administrator, so it is not instant.
+
+Stopgaps, in order of preference, if the portal must work before the cert lands:
+
+1. **Point DNS back at the old Lightsail host**, if it is still running. Reverts to
+   the pre-migration state. No WAF, but a working help desk.
+2. **Turn off osTicket's HTTPS redirect** so it serves over plain HTTP through the
+   ALB. This works, but it means credentials submitted to the ticket portal
+   travel unencrypted, and it is the reason the redirect exists. Only acceptable
+   as a short, deliberate, time-boxed measure — and it is worse than option 1.
+
+Do **not** reach for a self-signed or unrelated certificate on the 443 listener;
+browsers will refuse it and the SOW's own HTTPS position gets muddier.
+
+#### Confirm the cause on the instance
+
+```bash
+ACCT=$(aws sts get-caller-identity --query Account --output text)
+[ "$ACCT" != "395516496764" ] && { echo "WRONG ACCOUNT ($ACCT) — need Production"; exit 1; }
+
+iid=$(aws ec2 describe-instances --region us-east-2 \
+  --filters "Name=private-ip-address,Values=10.12.1.67" \
+  --query 'Reservations[].Instances[].InstanceId' --output text)
+echo "instance: $iid"
+
+cid=$(aws ssm send-command --region us-east-2 \
+  --document-name AWS-RunShellScript \
+  --instance-ids "$iid" \
+  --parameters 'commands=[
+    "echo \"--- as the health check sees it (Host: IP) ---\"",
+    "curl -s -o /dev/null -w \"%{http_code}\\n\" -H \"Host: 10.12.1.67\" http://127.0.0.1/",
+    "echo \"--- as a user sees it ---\"",
+    "curl -s -o /dev/null -w \"%{http_code}\\n\" -H \"Host: osticket.insightgrouppr.com\" http://127.0.0.1/",
+    "echo \"--- does a static file bypass PHP? ---\"",
+    "ls -la /var/www/html/ 2>/dev/null | head -20",
+    "echo \"--- recent errors ---\"",
+    "tail -30 /var/log/apache2/error.log 2>/dev/null || tail -30 /var/log/httpd/error_log 2>/dev/null"
+  ]' \
+  --query 'Command.CommandId' --output text)
+
+sleep 15
+aws ssm get-command-invocation --region us-east-2 \
+  --command-id "$cid" --instance-id "$iid" \
+  --query 'StandardOutputContent' --output text
+```
+
+- [ ] Confirmed the health check path returns a non-matching code when `Host` is the IP
+- [ ] Identified the DocumentRoot
+
+#### The fix
+
+**Not by widening the matcher.** Adding 500 to `health_check_matcher` would make
+the check pass while osTicket is genuinely broken, which is the same class of
+mistake as the `notBreaching` alarms in rev 2 — a monitor that cannot report
+failure.
+
+**Do this instead:** serve a static file that Apache answers for any `Host`,
+bypassing PHP entirely, and point the health check at it.
+
+1. On the instance, create the file in the DocumentRoot:
+
+   ```bash
+   # via SSM, same pattern as above
+   printf 'ok\n' | sudo tee /var/www/html/healthz
+   sudo chmod 644 /var/www/html/healthz
+   curl -s -o /dev/null -w 'healthz as IP host: %{http_code}\n' \
+     -H 'Host: 10.12.1.67' http://127.0.0.1/healthz
+   ```
+
+   Must return **200**. If it returns 500, osTicket's rewrite rules are catching
+   everything and need an exclusion for `/healthz`.
+
+2. Then a one-line Terraform PR — in `terraform/live/perimeter/osticket-alb/terraform.tfvars`:
+
+   ```hcl
+   health_check_path    = "/healthz"
+   health_check_matcher = "200"
+   ```
+
+   Expected plan: in-place update of `aws_lb_target_group`. **No replacement, no
+   destroy** — health check attributes are mutable. If the plan shows a
+   replacement, stop; that would drop the target registration.
+
+3. After apply, re-check:
+
+   ```bash
+   aws elbv2 describe-target-health --target-group-arn "$tg" --region us-east-2 \
+     --query 'TargetHealthDescriptions[].[Target.Id,TargetHealth.State]' --output table
+   ```
+
+- [ ] `/healthz` returns 200 with the IP as `Host`
+- [ ] tfvars PR merged and applied, plan showed an in-place update
+- [ ] Target reports `healthy`
+- [ ] Narrowing `health_check_matcher` to `200` confirmed — no longer accepting 301/302, which were only there to tolerate the redirect
+
+This belongs to the osTicket migration workstream rather than the WAF SOW.
+Cross-reference `.kiro/journal/2026-06-26-aheeva-cluster-migration-plan.md`, which
+covers the move off Lightsail.
+
 ---
 
 ## Step 9 — Baselines for crm and osticket (after ~1 week of traffic)
@@ -776,12 +1134,18 @@ Then set per-ACL thresholds at roughly 1.5–2× observed peak in `terraform/liv
 
 ## Definition of done
 
-SOW is signable when **Steps 1–6** are complete.
+SOW is signable when **Steps 1–6** are complete. **Step 6 is done.**
 
-Step 6 is in that set because it is part of the SOW logging deliverable. It is now one `curl` away (6c).
+That leaves **step 1** (open the dashboard) and **step 2** (the runbook exercise) on the gating list — plus steps 3, 4 and 5, which need Insight Group.
 
 **Step 7 no longer gates sign-off.** It was in the gating set while it might have been an unprotected public load balancer. The account-wide enumeration ruled that out, so it is state cleanup — do it, but it does not hold up the SOW.
 
-Steps 8–10 are operational follow-ups. Step 8 is worth prioritising because a public ticket portal is currently served over plain HTTP, and that is a live exposure even though it is not a WAF defect.
+Steps 8–10 are operational follow-ups. Step 8 is worth prioritising anyway: the ticket portal is on plain HTTP, which is a live exposure even though it is not a WAF defect, and **8d may mean the portal is not working at all.**
 
-**Shortest path to signable:** step 6c (one request, wait 5 minutes), step 1 (open the dashboard), step 2 (the ~30 minute runbook exercise). Then the four items that need Insight Group: Bot Control, custom rules, and the two training sessions.
+**Shortest path to signable:**
+
+1. **Step 8d** — two commands. Is the ticket portal actually serving? Do this first; it is the only thing on the list that might be an active outage.
+2. **Step 1** — open the dashboard, confirm the widgets populate.
+3. **Step 2** — the ~30 minute runbook exercise.
+
+Then the four Insight Group items: Bot Control, custom rules, and the two training sessions.

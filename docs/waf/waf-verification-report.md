@@ -42,19 +42,21 @@ Three result values are used:
 | V6 | CloudWatch dashboard `perimeter-waf` exists and is current | 2026-08-10 | **Pass** — console eyeball still outstanding, see "Not yet verified" |
 | V7 | All four Web ACLs return real metric datapoints | 2026-08-10 | **Pass** |
 | V8 | Full alarm inventory and deployed thresholds match the measured baseline | 2026-08-10 | **Pass** — 20 alarms confirmed. Correction 3 **resolved** |
-| V9 | WAF log records are actually landing in S3 for every protected resource | 2026-08-10 | **Fail, then remediated — 3 of 4 confirmed.** `crm-alb-waf` now delivering. `osticket-alb-waf` awaiting one request against an idle ALB. See Correction 2 |
-| V10 | Terraform state inventory contains no orphaned or duplicate state | 2026-08-10 | **Fail — but the security question is closed.** No stray load balancer exists. State cleanup outstanding. See Correction 4 |
-| V11 | HTTPS enforced on every public endpoint | 2026-08-10 | **Fail** — osTicket portal is served over plain HTTP pending DNS validation |
+| V9 | WAF log records are actually landing in S3 for every protected resource | 2026-08-10 | **Fail, then Pass** — all four Web ACLs now delivering. See Correction 2 |
+| V10 | Terraform state inventory contains no orphaned or duplicate state | 2026-08-10 | **Fail — security question closed.** The orphaned state's load balancer is gone; nothing was running unprotected. A partial destroy left one unmanaged security group. See Correction 4 |
+| V11 | HTTPS enforced on every public endpoint | 2026-08-10 | **Fail, and worse than first assessed.** osTicket redirects to HTTPS and the load balancer has no HTTPS listener, so the portal is unusable through it. See Correction 5 |
 
 ### Where this leaves things
 
-Of the three items outstanding when this report was first drafted:
+All three items that were outstanding when this report was first drafted are now closed:
 
-- **V8 is resolved.** 20 alarms, as designed.
-- **V9 is resolved for `crm-alb-waf`** and needs one HTTP request against an idle ALB to confirm the fourth.
-- **V10's security question is answered: there is no unprotected load balancer.** What remains is state hygiene, not exposure.
+- **V8 resolved.** 20 alarms, as designed.
+- **V9 resolved.** All four Web ACLs delivering log records to S3.
+- **V10's security question answered: there is no unprotected load balancer.** What remains is removing a stale state object — hygiene, not exposure.
 
-Nothing on this list is now an open security exposure other than V11, the plain-HTTP ticket portal, which is blocked on a DNS record only Insight Group can create.
+**The one item that got worse on closer inspection is V11**, the osTicket portal. It is not a WAF defect — the Web ACL inspects that traffic correctly — but it is the most serious finding in this report and it is written up as Correction 5.
+
+Two WAF verification steps remain, neither a known failure: a human needs to look at the dashboard, and the incident response runbook has not been exercised.
 
 ---
 
@@ -182,9 +184,22 @@ crm-alb-waf          log objects=1
 osticket-alb-waf     log objects=0
 ```
 
-**3 of 4 confirmed.** `crm-alb-waf` moved from 0 to 1 — the first record landed, which is what proves the log path works end to end. Volume follows traffic from here.
+`crm-alb-waf` moved from 0 to 1 — the first record landed, which is what proves the log path works end to end.
 
-`osticket-alb-waf` remains at 0. Its logging configuration is attached and identical to the one now proven working on `crm-alb-waf`; WAF only writes an object once a request has been inspected, and the osTicket ALB has simply not been hit since the change applied. One HTTP request against it settles this, and that is the last step on V9.
+`osticket-alb-waf` still read 0 at that point, because WAF writes an object only after inspecting a request and that ALB had received none since the change. Rather than write it off as idle, a single request was forced against it.
+
+**Final state — all four delivering:**
+
+| Web ACL | Before the fix | After |
+|---|---|---|
+| `ingress-alb-waf` | 28812 | 28830 |
+| `scriptcase-lb-waf` | 15492 | 15502 |
+| `crm-alb-waf` | **0** | 1, growing with traffic |
+| `osticket-alb-waf` | **0** | **4** |
+
+**Pass.** The SOW logging deliverable now covers every protected resource.
+
+**One unrelated observation.** The forced request returned HTTP **500** from osTicket. That has no bearing on V9 — WAF inspected the request and logged it, which is all this check tests — but it is not nothing. The likely cause is that the request used the load balancer's raw DNS name as the hostname, and osTicket stores an absolute helpdesk URL that it validates against. The health check reaches the target by IP and passes, so the application can be healthy while a wrong-hostname request errors. It is recorded as unconfirmed with a two-command test attached, in `waf-verification-record.md` under V9 and as step 8d of `waf-finish-checklist.md`. It belongs to the osTicket migration workstream rather than to the WAF engagement.
 
 ### V10 — Terraform state inventory
 
@@ -198,9 +213,9 @@ What remains is cleanup of the state object itself, so two state files can never
 
 ### V11 — HTTPS on every public endpoint
 
-**Fail.** The osTicket portal (`osticket.insightgrouppr.com`) is currently served over plain **HTTP**. Its ACM certificate `8c2c365f-a408-4bbf-8f6e-187a28665057` sits in `PENDING_VALIDATION` because the DNS validation record has not been created.
+**Fail, and materially worse than the first assessment.** Detail in Correction 5. In short: the osTicket portal is not merely served over plain HTTP — it redirects to HTTPS, and the load balancer has no HTTPS listener, so the portal is unusable through it.
 
-This is not a WAF defect — the Web ACL inspects the traffic either way — but it means credentials submitted to the ticket portal travel unencrypted, which is worth surfacing in the same report.
+The ACM certificate `8c2c365f-a408-4bbf-8f6e-187a28665057` sits in `PENDING_VALIDATION` because the DNS validation record has not been created. **That record is now on the critical path**, not a cosmetic follow-up.
 
 **Blocked on Insight Group's DNS administrator** at Network Solutions (`ns47.worldnic.com` / `ns48.worldnic.com`). One CNAME record:
 
@@ -216,7 +231,7 @@ Once ACM shows `ISSUED`, Nebularis flips `enable_https = true` on the `osticket-
 
 ## Corrections to our own record
 
-Four items where Nebularis's earlier reporting was wrong or incomplete. Each is stated with its root cause and what changed as a result.
+Five items where Nebularis's earlier reporting was wrong or incomplete. Each is stated with its root cause and what changed as a result. Correction 5 is not a WAF defect, but it was found during this work and is the most serious thing in this report.
 
 ### Correction 1 — Monitoring reported as verified when it was not (2026-06-21 → 2026-08-10)
 
@@ -255,7 +270,7 @@ Structurally this is the same failure as Correction 1: a gap that produced no er
 
 **Remediation — applied 2026-08-10.** PR **#69** replaced the fixed pair of variables with a `web_acl_names` list covering all four. The plan was create-only, as predicted: `2 to add, 0 to change, 0 to destroy`, with the two working logging configurations absent from the plan entirely. Merged and applied without incident.
 
-**Re-verified:** `crm-alb-waf` moved from 0 log objects to 1, confirming the log path works end to end for a newly enrolled Web ACL. `osticket-alb-waf` is attached and configured identically but has received no requests since the change, so it has nothing to write yet. One HTTP request against that ALB closes the last quarter of this check.
+**Re-verified and closed.** `crm-alb-waf` moved from 0 log objects to 1, confirming the log path works end to end for a newly enrolled Web ACL. `osticket-alb-waf` was still at 0 because its ALB had received no requests; a single forced request produced 4 log objects. **All four Web ACLs are now delivering.** This correction is fully remediated.
 
 **Note on the "and CloudWatch Logs" wording.** The SOW says S3 *and* CloudWatch Logs. Only S3 is used, and that is a deliberate design decision (D2 in `waf-design-decisions.md`), not part of this correction: CloudWatch Logs ingestion is by far the most expensive of the three destinations at per-request WAF volume, and the alternative Firehose path is blocked by an existing organizational SCP. S3 keeps the records queryable via Athena at a fraction of the cost. If Insight Group wants the CloudWatch Logs path specifically, it is available as a scoped change with a cost estimate attached.
 
@@ -286,19 +301,69 @@ Thirteen resources are claimed by a state file no live Terraform leaf points at.
 
 **No unprotected internet-facing endpoint exists.** That was the material risk in this finding and it is closed.
 
-What is left is state hygiene, one of two variants, and the remediation is the same either way:
+**Resolved to scenario (c) — but the destroy was partial.** Reading the state showed its load balancer as `icc-alb-396237492.us-east-2.elb.amazonaws.com`, a different DNS name from the live `crm-alb-142110994...`. So `crm-alb` was rebuilt rather than renamed in place, and the original `icc-alb` was destroyed.
 
 | | Scenario | Status |
 |---|---|---|
-| (a) | The state describes the same resources `crm-alb` now manages | Possible. Dual-management hazard: two state files claiming one set of resources, where a future apply against either could contend with the other. |
-| (b) | A separate `icc-alb` load balancer is still running | **Ruled out.** |
-| (c) | The resources are already gone; the state is purely stale | Possible. |
+| (a) | The state describes the same resources `crm-alb` now manages | **Ruled out** — different DNS name. |
+| (b) | A separate `icc-alb` load balancer is still running | **Ruled out** — no such load balancer. |
+| (c) | The resources are already gone; the state is stale | **Confirmed.** |
 
-Distinguishing (a) from (c) means reading the `aws_lb` ARN out of the orphaned state and comparing it to `crm-alb`'s. Worth doing before deletion, because it also reveals whether the `aws_security_group` and `aws_acm_certificate` in that state are shared with `crm-alb` or are unmanaged leftovers. Neither carries cost, but an unmanaged security group is worth knowing about.
+The wrinkle: the destroy did not finish. `icc-alb-sg` (`sg-076c916a807936cee`) is still present in the account, unmanaged by any Terraform state that anything points at. That is the signature of a destroy that hit a `DependencyViolation` on the security group — AWS refuses to delete one while a network interface still references it — and was never revisited. No ACM certificate with `icc` in its domain remains.
 
-Remediation in both cases: back up the state object, then remove it and its DynamoDB lock digest. Deleting a state object is irreversible, so the backup comes first. Step 7 of `waf-finish-checklist.md`.
+**Consequence:** none, in practical terms. An unused security group costs nothing and grants nothing, because no network interface uses it. It is untidy rather than risky.
+
+**Remediation:** confirm nothing references the security group — both network interfaces *and* rules in other security groups that allow traffic from it, the second being the one people forget — then delete it, then remove the state object and its DynamoDB lock digest. **In that order**, because the state file is the only remaining record of what `icc-alb` consisted of, and deleting a state object is irreversible. Step 7 of `waf-finish-checklist.md`.
 
 **Why this belongs in a WAF report.** V5 concluded "4 of 4 ALBs protected," and that conclusion is only as good as the list of ALBs it was checked against. Chasing this finding is what produced the full account-wide load balancer enumeration, which is what makes V5 unconditional rather than a statement about the ALBs we happened to know of.
+
+### Correction 5 — the osTicket portal is unusable through its load balancer
+
+**Not a WAF defect.** The Web ACL inspects that traffic correctly and logs it, which V5, V7 and V9 all confirm. This is included because it was found while verifying the WAF work, it is the most serious thing in this report, and leaving it out would mean Insight Group discovers it later.
+
+**Three measurements, in the order they were taken:**
+
+```
+request by the load balancer's own DNS name   ->  HTTP 500
+request with Host: osticket.insightgrouppr.com ->  HTTP 301
+                                                   Location: https://osticket.insightgrouppr.com/
+target group health                            ->  10.12.1.67  unhealthy
+                                                   Target.ResponseCodeMismatch
+```
+
+**Finding 1 — the target has been unhealthy, and the load balancer has been serving traffic anyway.**
+
+AWS load balancer health checks address the target by IP, and there is no facility to make them send a specific hostname. The check requests `/` and accepts 200, 301 or 302; osTicket returns 500 for a request on a hostname it does not recognise; the check therefore fails.
+
+Traffic continued to flow because of documented AWS behaviour: when *every* target in a group is unhealthy, the load balancer sends requests to all of them regardless. With a single target, it fails open. Nothing alarmed, nothing 503'd, and the condition was invisible.
+
+**Consequence:** the portal has been running with no health gating. If osTicket genuinely failed, the load balancer could not detect it and had nowhere to move traffic.
+
+**Finding 2 — the redirect leads to a closed port.**
+
+osTicket redirects to `https://osticket.insightgrouppr.com/`. HTTPS is not enabled on this load balancer, because the certificate is still unvalidated, so **there is no listener on port 443.** Every browser that follows the redirect reaches a closed port.
+
+The chain, end to end:
+
+```
+GET http://osticket.insightgrouppr.com/
+  -> load balancer :80 forwards to the osTicket instance
+  -> osTicket redirects to https://osticket.insightgrouppr.com/
+  -> load balancer :443  ... no listener. Connection refused.
+```
+
+**Whether this is a live outage depends on DNS**, which is the one measurement still outstanding. If `osticket.insightgrouppr.com` resolves to this load balancer, the help desk is down for users right now. If it still resolves to the pre-migration Lightsail host, it is not an outage — but it means the migration has not cut over and **the WAF protecting `osticket-alb` is not yet in front of real user traffic.**
+
+**What this changes.** The ACM validation CNAME was previously listed as an operational follow-up. **It is now on the critical path.** No certificate means no HTTPS listener, and no HTTPS listener means the redirect cannot resolve. That record can only be created by Insight Group's DNS administrator.
+
+**Remediation:**
+
+1. **Create the validation CNAME** (values under V11). Then `enable_https = true`, which adds the 443 listener and turns the port-80 listener into a redirect. This fixes finding 2 properly.
+2. **Fix the health check** with a static file that the web server answers for any hostname, bypassing osTicket's application code, and point the check at it. Deliberately **not** by widening the accepted status codes to include 500 — that would make the check pass while osTicket was genuinely broken, which is the same mistake as the alarms in Correction 1: a monitor that cannot report failure.
+
+Both are written up as step 8d of `waf-finish-checklist.md`, with stopgaps if the portal has to work before the certificate lands.
+
+**Nebularis's assessment of our own handling.** The first time this 500 was seen, we described it as most likely a testing artefact. That was too generous, and we said so in writing rather than quietly revising it. The correct read was available at the time: a 200/301/302 response tells you a redirect exists, not that an application works, and we should have asked where the redirect pointed before offering an opinion.
 
 ---
 
@@ -320,9 +385,8 @@ Listed explicitly. These are gaps in verification, not known failures.
 
 | Item | Why not verified | How to close |
 |---|---|---|
-| `osticket-alb-waf` log delivery | The ALB has had no traffic since the logging change applied, so WAF has nothing to write | One HTTP request against it, then re-run V9 — checklist step 6a |
 | Dashboard widgets render populated | Requires a human to look at it | Open the `perimeter-waf` dashboard in the console — checklist step 1 |
-| Whether the orphaned state duplicates `crm-alb` or is fully stale | Not needed to answer the security question, which is closed | Read the `aws_lb` ARN out of the state and compare — checklist step 7 |
+| Whether the osTicket outage is live | Depends on what `osticket.insightgrouppr.com` currently resolves to — the load balancer, or the pre-migration host | One DNS lookup — checklist step 8d. **The last unknown on this list.** |
 | Incident response runbook exercised end to end | The runbook is written but has never been run | Block/unblock exercise, ~30 min — checklist step 2 |
 | `crm-alb-waf` / `osticket-alb-waf` traffic baselines | Need a week of data; they currently run on module-default thresholds | Re-run the baseline capture after a week |
 | Bot Control efficacy | Not deployed — pending an Insight Group cost decision | See `waf-sow-closeout.md`, open item 1 |
@@ -333,11 +397,13 @@ Listed explicitly. These are gaps in verification, not known failures.
 
 The filtering layer is verified working. All four internet-facing applications are inspected by AWS WAF with the OWASP-aligned managed rule groups and per-IP rate limiting active, and no legitimate traffic has been observed blocked.
 
-The observability layer around it was where the defects were, and both were the same shape: something silently uncovered, reporting green. Both are now fixed and re-verified — Correction 1 by the namespace fix and the liveness alarms, Correction 2 by PR #69, merged and applied on 2026-08-10.
+The observability layer around it was where the defects were, and both were the same shape: something silently uncovered, reporting green. Both are now fixed and fully re-verified — Correction 1 by the namespace fix and the liveness alarms, Correction 2 by PR #69, merged and applied on 2026-08-10, with all four Web ACLs confirmed delivering log records.
 
-**No open security exposure remains in the WAF layer.** The state-file finding turned out not to involve a live endpoint. The one exposure still on the list is unrelated to WAF: the osTicket portal is served over plain HTTP, and that is blocked on a DNS record only Insight Group can create.
+**No open security exposure remains in the WAF layer.** The state-file finding turned out not to involve a live endpoint. What is outstanding on the WAF side is small and none of it is a known failure: a look at the dashboard, one runbook exercise, and cleanup of a stale security group and state object.
 
-What is genuinely outstanding is small: one HTTP request to confirm the fourth Web ACL's log delivery, one look at the dashboard, one runbook exercise, and cleanup of a stale state object. Nebularis's recommendation is to treat those as a single short session, and to treat Bot Control, the custom-rules review and the two training sessions as the actual remaining decisions. Detail and sign-off in `waf-sow-closeout.md`.
+**The one thing that needs attention now is not WAF at all.** Correction 5: the osTicket help desk redirects to HTTPS on a load balancer that has no HTTPS listener, and its target group has been unhealthy the whole time behind a load balancer that was failing open. That may or may not be a live outage depending on one DNS lookup, and the fix begins with a certificate validation record only Insight Group can create.
+
+Nebularis's recommendation: settle the osTicket DNS question first, then treat the remaining WAF items as a single short session, then treat Bot Control, the custom-rules review and the two training sessions as the actual remaining decisions. Detail and sign-off in `waf-sow-closeout.md`.
 
 ---
 

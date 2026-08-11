@@ -49,22 +49,26 @@ Supporting material for the remaining items:
 
 **Closed 2026-08-10:**
 
-- Logging enrolled for `crm-alb-waf` and `osticket-alb-waf` — **PR #69** merged and applied. `crm-alb-waf` confirmed delivering (0 → 1 objects).
-- Alarm inventory confirmed at **20**. The earlier six-alarm reading was stale.
-- Account-wide load balancer enumeration: **4 ALBs, all with a Web ACL, no `icc-alb`.** The orphaned state file does not correspond to a live unprotected endpoint.
+- **WAF logging on all four Web ACLs, confirmed delivering** — 28830 / 15502 / 1 / 4. **PR #69** merged and applied.
+- **Alarm inventory confirmed at 20.** The earlier six-alarm reading was stale.
+- **Account-wide load balancer enumeration: 4 ALBs, all with a Web ACL, no `icc-alb`.** The orphaned state file does not correspond to a live unprotected endpoint, and the ALB inventory is now known complete.
 
 **Nebularis to close — engineering, no client input, and no additional charge:**
 
-1. **`osticket-alb-waf` log delivery** — attached and identically configured to the one now proven working, but its ALB is idle so it has nothing to write. One request closes it. Checklist step 6c.
-2. **Dashboard visual confirmation** and **runbook exercise**. Checklist steps 1 and 2.
-3. **Remove the orphaned `icc-alb` state object** — state hygiene, not exposure. Checklist step 7.
+1. **Dashboard visual confirmation** — checklist step 1. Last unverified item on SOW acceptance criterion 4.
+2. **Runbook exercise** — ~30 minutes, checklist step 2.
+3. **Remove the orphaned `icc-alb` security group and state object** — resolved to a destroyed ALB with a partial destroy; `sg-076c916a807936cee` survives unmanaged. Hygiene, not exposure. Checklist step 7.
+
+**Outside the WAF SOW, but the most serious thing on this page:**
+
+4. **The osTicket portal is unusable through its load balancer.** Not a WAF defect — the Web ACL inspects and logs that traffic correctly. But the target group has been unhealthy the whole time behind a load balancer that was failing open, and osTicket redirects to an HTTPS listener that does not exist. Whether it is a live outage turns on one DNS lookup. **This puts the ACM validation CNAME on the critical path.** Checklist step 8d.
 
 **Requires Insight Group:**
 
 4. **Bot Control** — decision: deploy or waive in writing
 5. **Custom rules** — four short owner conversations, then rules or a recorded finding
 6. **Two training sessions** — scripts are `waf-runbook.md` and `waf-tuning-guide.md`
-7. **osTicket DNS validation CNAME** — **the only live exposure left.** The ticket portal is on plain HTTP, so credentials submitted to it travel unencrypted. One CNAME at Network Solutions; values are in `waf-sow-closeout.md`.
+7. **osTicket DNS validation CNAME** — **now on the critical path, not cosmetic.** Without the certificate there is no HTTPS listener, and without the listener osTicket's redirect has nowhere to land. One CNAME at Network Solutions; values are in `waf-sow-closeout.md`. See item 4 above.
 
 The items closed above were found by a wider verification round on 2026-08-10, after the June closeout had already reported those areas as complete. The findings, why they went unnoticed, and how they resolved are written up in `waf-verification-report.md`; status and the payment position are in `waf-sow-closeout.md`.
 

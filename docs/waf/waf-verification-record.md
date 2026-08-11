@@ -584,8 +584,8 @@ re-driving via `workflow_dispatch` with `apply=true`.
 
 ## V9 — WAF log records actually landing in S3, per Web ACL
 
-**Status: FAILED on first run, remediated the same day. 3 of 4 confirmed;
-`osticket-alb-waf` awaiting one request against an idle ALB.**
+**Status: FAILED on first run, remediated and fully re-verified the same day.
+PASSED 2026-08-10 — all four Web ACLs delivering.**
 
 V2 confirmed logging was *attached*. It did not confirm records were *arriving*,
 and it only covered the two Web ACLs that existed at the time. This check does
@@ -666,18 +666,17 @@ is the meaningful signal: it proves the logging configuration, the bucket policy
 and the KMS grant all work for a newly enrolled Web ACL. Volume follows traffic
 from there.
 
-`osticket-alb-waf` still reads 0. Its logging configuration is attached and byte
-for byte identical to the one now proven on `crm-alb-waf`; WAF writes an object
-only after inspecting a request, and the osTicket ALB has had none since the
-apply. **This is an idle-ALB artefact, not a configuration fault** — but it is
-recorded as unconfirmed rather than assumed, because assuming is how V3 went
-wrong.
+`osticket-alb-waf` still read 0 at this point. Its logging configuration was
+attached and byte for byte identical to the one proven on `crm-alb-waf`; WAF
+writes an object only after inspecting a request, and the osTicket ALB had
+received none since the apply. That was recorded as unconfirmed rather than
+assumed, because assuming is how V3 went wrong.
 
-**Closing step for V9**
+**Closing step — forced request, run 2026-08-10**
 
 ```bash
 # Force one inspected request. Plain HTTP because the cert is still pending (V11).
-curl -sS -o /dev/null -w '%{http_code}\n' \
+curl -sS -o /dev/null -w 'http status: %{http_code}\n' \
   http://osticket-alb-343594101.us-east-2.elb.amazonaws.com/
 
 sleep 360   # WAF batches to S3 in roughly 5-minute windows
@@ -687,17 +686,75 @@ aws s3 ls \
   --recursive | wc -l
 ```
 
-Pass: count is 1 or more. Any HTTP status is fine — a 200, 302, 404 or even a 503
-all mean WAF inspected the request, which is the only thing being tested.
+**Result**
 
-If it still reads 0 after ten minutes with a confirmed request, then it is a real
-fault and the next step is `aws wafv2 get-logging-configuration` on the osTicket
-Web ACL to confirm the destination, followed by the bucket policy.
+```
+http status: 500
+4
+```
+
+**PASS.** Four log objects under the `osticket-alb-waf` prefix. WAF inspected the
+request and delivered the record. That was the only thing this check tested, and
+the HTTP status is irrelevant to it — a 200, 302, 404 or 500 all prove inspection
+happened.
+
+**Final V9 state — all four Web ACLs delivering:**
+
+| Web ACL | Before #69 | After |
+|---|---|---|
+| `ingress-alb-waf` | 28812 | 28830 |
+| `scriptcase-lb-waf` | 15492 | 15502 |
+| `crm-alb-waf` | **0** | 1 → growing |
+| `osticket-alb-waf` | **0** | **4** |
+
+The SOW logging deliverable now covers every protected resource.
+
+> ### Unrelated finding: osTicket returned HTTP 500
+>
+> The `500` above is not a WAF result and does not affect V9, but it should not
+> pass without comment.
+>
+> The `osticket-alb` listener is a plain forward to `10.12.1.67:80` — no
+> host-based routing rules, no fixed-response default action. So the 500 came
+> from the osTicket application itself, not from the load balancer. An ALB with
+> no healthy targets returns 503, and a malformed target response returns 502;
+> a 500 means a target answered and the app errored.
+>
+> **Most likely explanation, not yet confirmed:** the request used the raw ALB
+> DNS name as the `Host` header. osTicket stores an absolute helpdesk URL in
+> `ost-config.php` and commonly errors when reached on an unexpected hostname.
+> The target group's health check uses `/` with matcher `200,301,302` and sends
+> the target IP as `Host`, so the target can be healthy while a
+> wrong-`Host` request 500s. That is consistent with what was observed.
+>
+> **The test that settles it** — same request with the correct host header:
+>
+> ```bash
+> curl -sS -o /dev/null -w 'correct Host: %{http_code}\n' \
+>   -H 'Host: osticket.insightgrouppr.com' \
+>   http://osticket-alb-343594101.us-east-2.elb.amazonaws.com/
+>
+> ACCT=$(aws sts get-caller-identity --query Account --output text)
+> [ "$ACCT" != "713939170920" ] && { echo "WRONG ACCOUNT ($ACCT)"; exit 1; }
+>
+> tg=$(aws elbv2 describe-target-groups --region us-east-2 \
+>   --query "TargetGroups[?contains(TargetGroupName,'osticket')].TargetGroupArn | [0]" \
+>   --output text)
+> aws elbv2 describe-target-health --target-group-arn "$tg" --region us-east-2 \
+>   --query 'TargetHealthDescriptions[].[Target.Id,TargetHealth.State,TargetHealth.Reason]' \
+>   --output table
+> ```
+>
+> A 200/301/302 with the correct `Host` and a `healthy` target means the portal
+> works and the 500 was an artefact of testing by IP. Anything else is a real
+> osTicket problem, and it belongs to the migration workstream rather than to
+> this document. Tracked as step 8d of `waf-finish-checklist.md`.
 
 ## V10 — Terraform state inventory for orphans and duplicates
 
-**Status: FAILED on state hygiene. The security question is CLOSED — no stray
-load balancer exists.**
+**Status: FAILED on state hygiene. Security question CLOSED — no stray load
+balancer exists. Resolved to scenario (c): the ALB was destroyed, but the destroy
+was PARTIAL and left `icc-alb-sg` (`sg-076c916a807936cee`) behind, unmanaged.**
 
 The concern this raised was whether a second internet-facing load balancer was
 running outside the WAF programme. An account-wide `describe-load-balancers` on
@@ -749,9 +806,36 @@ state — but it claims 13 live resources.
 
 | | Scenario | Status |
 |---|---|---|
-| **(a)** | The state describes the same resources `crm-alb` now manages | **Possible.** Dual-management hazard: two state files claiming one set of resources; a future apply against either could contend with the other. No extra cost, no extra exposure. |
+| **(a)** | The state describes the same resources `crm-alb` now manages | **RULED OUT 2026-08-10** — the state's ALB DNS name is `icc-alb-396237492.us-east-2.elb.amazonaws.com`, not `crm-alb-142110994...`. Different load balancer; `crm-alb` was rebuilt, not renamed in place. |
 | **(b)** | A separate `icc-alb` ALB is still running | **RULED OUT 2026-08-10** — account-wide `describe-load-balancers` shows no `icc-alb`, and all four ALBs present have a Web ACL. |
-| **(c)** | The resources are already gone; the state is purely stale | **Possible.** |
+| **(c)** | The resources are already gone; the state is purely stale | **CONFIRMED 2026-08-10 — with a partial-destroy wrinkle.** See below. |
+
+**Measured**
+
+```
+$ aws s3 cp s3://.../live/perimeter/icc-alb/terraform.tfstate - \
+    | jq -r '.resources[] | select(.type=="aws_lb") | .instances[].attributes | "\(.name)  \(.dns_name)"'
+icc-alb  icc-alb-396237492.us-east-2.elb.amazonaws.com
+
+$ aws ec2 describe-security-groups --region us-east-2 \
+    --filters "Name=group-name,Values=*icc*" --query 'SecurityGroups[].[GroupId,GroupName]'
+sg-076c916a807936cee   icc-alb-sg          <- STILL EXISTS, unmanaged
+
+$ aws acm list-certificates --region us-east-2 \
+    --query 'CertificateSummaryList[?contains(DomainName,`icc`)]...'
+(empty)
+```
+
+**The destroy that removed `icc-alb` did not finish.** `icc-alb-sg` survives with
+no Terraform state pointing at it. That is the signature of a
+`DependencyViolation` — AWS refuses to delete a security group while a network
+interface still references it — which was hit at destroy time and never revisited.
+
+**Practical consequence: none.** An unused security group costs nothing and grants
+nothing while no ENI uses it. Untidy rather than risky. But it must be confirmed
+unreferenced before deletion, and the check has to cover **rules in other security
+groups that allow traffic from it**, not just attached ENIs. The second is the one
+that gets missed.
 
 Distinguishing (a) from (c) is no longer urgent — neither is an exposure — but it
 is worth one command before deletion, because it also reveals whether the
@@ -814,7 +898,11 @@ useful outcome of this finding, independent of the state cleanup.
 
 ## V11 — HTTPS on every public endpoint
 
-**Status: FAILED — blocked on Insight Group's DNS administrator.**
+**Status: FAILED, and materially worse than first assessed. The osTicket portal
+is unusable through its ALB: osTicket 301s to `https://` and the ALB has no 443
+listener. Blocked on Insight Group's DNS administrator, which is now on the
+critical path rather than a cosmetic follow-up. Full write-up in
+`waf-verification-report.md` Correction 5 and `waf-finish-checklist.md` step 8d.**
 
 **Command**
 
@@ -842,13 +930,57 @@ aws acm describe-certificate --region us-east-2 \
 }
 ```
 
-**Fail.** The osTicket portal is served over plain HTTP. The Web ACL inspects
-the traffic either way, so this is not a WAF defect, but credentials submitted
-to the ticket portal travel unencrypted and that belongs in the same record.
+**Fail — and the consequence is larger than "traffic is unencrypted".**
 
-**Blocked on:** one CNAME at Network Solutions (`ns47.worldnic.com` /
-`ns48.worldnic.com`), using the Name and Value above. Once ACM reads `ISSUED`,
-set `enable_https = true` on the `osticket-alb` leaf — a one-line PR.
+Measured 2026-08-10 while closing V9:
+
+```
+request by the ALB's own DNS name              ->  500
+request with Host: osticket.insightgrouppr.com ->  301
+                                                   Location: https://osticket.insightgrouppr.com/
+target group health                            ->  10.12.1.67 unhealthy
+                                                   Target.ResponseCodeMismatch
+```
+
+**osTicket redirects to `https://`, and there is no 443 listener.**
+`enable_https = false` leaves `certificate_arn` empty, and the `alb` module gates
+`aws_lb_listener.https` on `count = var.certificate_arn == "" ? 0 : 1`. So:
+
+```
+GET http://osticket.insightgrouppr.com/
+  -> ALB :80 forwards to 10.12.1.67:80
+  -> osTicket 301 -> https://osticket.insightgrouppr.com/
+  -> ALB :443  ... no listener. Connection refused.
+```
+
+The portal is **unusable through this ALB** for any client that follows the
+redirect, which is every browser.
+
+**Separately, the target group has been unhealthy the whole time.** ALB health
+checks address the target by IP and ELBv2 has no `HealthCheckHost` parameter; the
+check requests `/` with matcher `200,301,302`; osTicket returns 500 on an
+unrecognised host; mismatch. Traffic still flowed because when every target in a
+group is unhealthy the ALB routes to all of them regardless — a single unhealthy
+target means it fails open, silently.
+
+**Not a WAF defect.** The Web ACL inspects and logs that traffic correctly, as V5,
+V7 and V9 confirm. Recorded here because it was found during WAF verification.
+
+**Whether it is a live outage is the one open question**, and it turns on what
+`osticket.insightgrouppr.com` resolves to. If the ALB, the help desk is down now.
+If the pre-migration Lightsail host, it is not an outage — but the migration has
+not cut over and `osticket-alb-waf` is not yet in front of real user traffic.
+
+**This moves the validation CNAME onto the critical path.** No certificate means no
+443 listener, and no 443 listener means the redirect cannot land. One CNAME at
+Network Solutions (`ns47.worldnic.com` / `ns48.worldnic.com`) using the Name and
+Value above; then `enable_https = true` on the `osticket-alb` leaf, which both adds
+the 443 listener and converts the port-80 listener to a redirect.
+
+Health-check fix and stopgaps: `waf-finish-checklist.md` step 8d. The fix is a
+static file the web server answers for any `Host`, **not** widening the matcher to
+accept 500 — that would reproduce the rev 2 mistake of a monitor unable to report
+failure.
 
 ## Verification summary
 
@@ -863,9 +995,9 @@ set `enable_https = true` on the `osticket-alb` leaf — a one-line PR.
 | V6 — Dashboard `perimeter-waf` exists and is post-fix | **Pass (2026-08-10)** — `LastModified 2026-08-10T18:11:59`. Console eyeball still outstanding |
 | V7 — All four Web ACLs return metric datapoints | **Pass (2026-08-10)** — 36 / 19 / 3 / 5 |
 | V8 — Alarm inventory (20 expected) and thresholds | **Pass (2026-08-10)** — 20 confirmed. First recorded as NOT VERIFIED on a stale six-alarm capture; re-run settled it |
-| V9 — Log records actually landing in S3, per Web ACL | **FAIL, then remediated (2026-08-10)** — was 28812/15492/**0**/**0**; PR #69 merged and applied; now 28830/15502/**1**/0. 3 of 4 confirmed; `osticket-alb-waf` needs one request against an idle ALB |
-| V10 — State backend free of orphans / duplicates | **FAIL on hygiene; security question CLOSED (2026-08-10)** — orphaned `icc-alb` state claims 13 resources, but no stray ALB exists. Scenario (b) ruled out. Cleanup outstanding |
-| V11 — HTTPS on every public endpoint | **FAIL (2026-08-10)** — osTicket on plain HTTP; ACM cert `PENDING_VALIDATION` awaiting a client-side DNS record |
+| V9 — Log records actually landing in S3, per Web ACL | **FAIL, then PASS (2026-08-10)** — was 28812/15492/**0**/**0**; PR #69 merged and applied; now 28830/15502/**1**/**4**. All four Web ACLs delivering |
+| V10 — State backend free of orphans / duplicates | **FAIL on hygiene; security question CLOSED (2026-08-10)** — resolved to scenario (c): state ALB is `icc-alb-396237492...`, not `crm-alb-142110994...`, and no `icc-alb` exists. Destroy was partial — `sg-076c916a807936cee` survives unmanaged. Cleanup outstanding |
+| V11 — HTTPS on every public endpoint | **FAIL (2026-08-10), worse than first assessed** — osTicket 301s to `https://` and the ALB has no 443 listener, so the portal is unusable through it. Target group also unhealthy behind a fail-open ALB. ACM cert `PENDING_VALIDATION` is now on the critical path |
 
 Round 3 changed the method, not just the coverage. V1–V4 asked "does the thing
 the configuration names exist?" V5, V9 and V10 enumerate from AWS first and
