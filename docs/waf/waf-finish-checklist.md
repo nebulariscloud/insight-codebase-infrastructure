@@ -26,9 +26,21 @@ Steps 6 and 7 were added after a wider verification round on 2026-08-10 found th
 - **Alarm inventory: 20.** The earlier six-alarm reading was stale, from before #62's apply.
 - **Account-wide load balancer enumeration: 7 LBs, 4 ALBs, all four with a Web ACL, no `icc-alb`.** The orphaned state does not correspond to a live unprotected endpoint. Step 7 drops from "possible security exposure" to state cleanup.
 - **PRs #58, #69 and #70 all merged**; nothing open.
-- **New, unrelated:** osTicket returned HTTP **500** when reached by the ALB's raw DNS name. Probably an artefact of requesting by IP rather than by hostname, but unverified. **Step 8d.**
+- **Step 1: everything checkable by command has passed.** Dashboard exists, body references only `AWS/WAFV2`, all four Web ACLs returning datapoints. Only the console eyeball is left.
+- **Step 7 resolved to scenario (c)** — the `icc-alb` ALB is gone, so nothing was running unprotected. But the destroy was **partial**: `icc-alb-sg` (`sg-076c916a807936cee`) survives, unmanaged. Delete the SG before the state object, since the state is the only record of what `icc-alb` consisted of.
 
-> **Priority order:** step 8d (two commands — is the ticket portal actually working?), then step 1 (open the dashboard), then step 2 (the ~30 minute runbook exercise). Step 7 is tidying. Steps 3–5 need Insight Group.
+> ### ⚠️ osTicket is broken through the ALB — step 8d
+>
+> Not a WAF defect, but the most serious thing on this list.
+>
+> - The target group has been **unhealthy** the whole time (`Target.ResponseCodeMismatch`); the ALB has been failing open, so nobody noticed.
+> - osTicket **301s to `https://osticket.insightgrouppr.com/`**, and this ALB has **no 443 listener** because `enable_https = false`. Every browser following that redirect hits a closed port.
+>
+> **This puts the ACM validation CNAME in step 8a on the critical path.** It was previously filed as a cosmetic follow-up. Without the cert there is no 443 listener, and without the listener the redirect has nowhere to land.
+>
+> Whether it is a *live* outage depends on what `osticket.insightgrouppr.com` resolves to — see step 8d.
+
+**Priority order:** step 8d (finish the DNS check, then decide urgency), then step 1 (open the dashboard, last item on acceptance criterion 4), then step 2 (the ~30 minute runbook exercise). Step 7 is tidying. Steps 3–5 need Insight Group.
 
 ---
 
@@ -138,10 +150,15 @@ done
 
 > `date -u -d '2 hours ago'` is GNU. On macOS use `date -u -v-2H`.
 
-- [ ] Dashboard `perimeter-waf` exists
-- [ ] `get-dashboard` prints **only** `AWS/WAFV2` — capital `V`
-- [ ] All four Web ACLs report datapoints > 0
+- [x] Dashboard `perimeter-waf` exists — `LastModified 2026-08-10T18:11:59`
+- [x] `get-dashboard` prints **only** `AWS/WAFV2` — confirmed 2026-08-10, single line of output, no lowercase-`v` variant anywhere in the body
+- [x] All four Web ACLs report datapoints > 0 — 36 / 19 / 3 / 5
 - [ ] Opened the dashboard in the console and the widgets show values, not "No data available"
+
+**Only the console eyeball is left on this step.** Everything checkable by command
+has passed, which means if the widgets *do* render empty it is a console or
+time-range issue, not a data problem — set the range to 3 hours before concluding
+anything.
 
 `crm-alb-waf` and `osticket-alb-waf` may show 0 briefly if their ALBs are idle — widen the dashboard time range to 3 hours, or re-run after some traffic.
 
@@ -610,9 +627,9 @@ No leaf on `main` points at it. Three scenarios:
 
 | | Scenario | Status |
 |---|---|---|
-| **(a)** | Same resources `crm-alb` now manages | Possible. Dual-management hazard — two states claiming one set of resources. No cost, no exposure. |
+| **(a)** | Same resources `crm-alb` now manages | **RULED OUT 2026-08-10** — the state's ALB DNS name is `icc-alb-396237492...`, not `crm-alb-142110994...`. Different load balancer; `crm-alb` was rebuilt, not renamed in place. |
 | **(b)** | A separate `icc-alb` ALB is still running | **RULED OUT 2026-08-10** — no `icc-alb` in the account. |
-| **(c)** | Resources already gone, state purely stale | Possible. |
+| **(c)** | Resources already gone, state purely stale | **CONFIRMED** — but the destroy was partial. `icc-alb-sg` (`sg-076c916a807936cee`) survives, unmanaged. |
 
 ### 7a. Which one is it — (a) or (c)
 
@@ -644,29 +661,104 @@ aws s3 cp s3://lza-terraform-state-547368325532/live/perimeter/icc-alb/terraform
   | jq -r '.resources[] | select(.type=="aws_lb") | .instances[].attributes | "\(.name)  \(.arn)  \(.dns_name)"'
 ```
 
-- [ ] Recorded the ALB name / ARN / DNS name from the orphaned state
-- [ ] Compared against `crm-alb-142110994.us-east-2.elb.amazonaws.com` — match means (a), no match means (c)
+**Measured 2026-08-10:**
 
-While in there, since the state also claims a security group and a certificate:
+```
+icc-alb  icc-alb-396237492.us-east-2.elb.amazonaws.com
+```
+
+- [x] Recorded the ALB name / DNS name from the orphaned state
+- [x] Compared against the live list
+
+**This is scenario (c), with a wrinkle.** `icc-alb-396237492...` is a *different*
+DNS name from `crm-alb-142110994...`, so this was never the same load balancer
+under a new name — `crm-alb` was rebuilt rather than renamed in place. And
+`describe-load-balancers` shows no `icc-alb`, so that ALB is gone.
+
+**But not everything in the state is gone:**
+
+```
+$ aws ec2 describe-security-groups --region us-east-2 \
+    --filters "Name=group-name,Values=*icc*" \
+    --query 'SecurityGroups[].[GroupId,GroupName]' --output table
+sg-076c916a807936cee   icc-alb-sg          <- still exists, unmanaged
+
+$ aws acm list-certificates --region us-east-2 \
+    --query 'CertificateSummaryList[?contains(DomainName,`icc`)]...'
+(empty)                                    <- no cert with 'icc' in the domain
+```
+
+So the destroy that removed the ALB left `icc-alb-sg` behind. That is consistent
+with a partial destroy: security groups cannot be deleted while an ENI still
+references them, so it very likely failed on a dependency at the time and was
+never revisited.
+
+- [x] Noted the leftovers — `sg-076c916a807936cee` (`icc-alb-sg`) survives
+
+#### Before deleting anything: is that security group actually unused?
+
+An unused security group costs nothing, but deleting one that is still referenced
+breaks things silently. Two things reference a security group: network interfaces
+that use it, and **rules in other security groups that allow traffic from it.**
+The second is the one people forget.
 
 ```bash
 ACCT=$(aws sts get-caller-identity --query Account --output text)
 [ "$ACCT" != "713939170920" ] && { echo "WRONG ACCOUNT ($ACCT) — need Perimeter"; exit 1; }
 
-aws ec2 describe-security-groups --region us-east-2 \
-  --filters "Name=group-name,Values=*icc*" \
-  --query 'SecurityGroups[].[GroupId,GroupName,Description]' --output table
+SG=sg-076c916a807936cee
 
-aws acm list-certificates --region us-east-2 \
-  --query 'CertificateSummaryList[?contains(DomainName,`icc`)].[CertificateArn,DomainName,Status]' \
+echo "=== network interfaces using it (expect none) ==="
+aws ec2 describe-network-interfaces --region us-east-2 \
+  --filters "Name=group-id,Values=$SG" \
+  --query 'NetworkInterfaces[].[NetworkInterfaceId,Description,Status]' --output table
+
+echo "=== other security groups whose rules reference it (expect none) ==="
+aws ec2 describe-security-groups --region us-east-2 \
+  --query "SecurityGroups[?IpPermissions[?UserIdGroupPairs[?GroupId=='$SG']] || IpPermissionsEgress[?UserIdGroupPairs[?GroupId=='$SG']]].[GroupId,GroupName]" \
   --output table
 ```
 
-- [ ] Noted whether an unmanaged `icc*` security group or certificate is left behind
+- [ ] No network interfaces
+- [ ] No other security group references it in a rule
 
-Neither costs anything unused, but an unmanaged security group in Perimeter is worth knowing about and an unused cert is worth deleting for tidiness.
+The cert also deserves a wider look — the state resource was named
+`aws_acm_certificate.icc`, but the *domain* on it may not contain the string
+`icc`, so the filter above could miss it:
+
+```bash
+aws acm list-certificates --region us-east-2 \
+  --query 'CertificateSummaryList[].[CertificateArn,DomainName,Status,InUse]' --output table
+```
+
+- [ ] Accounted for every certificate listed; noted any unused one left over from `icc-alb`
+
+An unused ACM certificate is free and harmless. Worth deleting for tidiness, but
+**never delete one that reports `InUse: true`.**
 
 ### 7b. Act on the answer
+
+**Confirmed path for this case: scenario (c).** The ALB is gone. Delete the
+orphaned security group first, *then* the state object — in that order, because
+the state file is the only remaining record of what `icc-alb` consisted of.
+
+```bash
+ACCT=$(aws sts get-caller-identity --query Account --output text)
+[ "$ACCT" != "713939170920" ] && { echo "WRONG ACCOUNT ($ACCT) — need Perimeter"; exit 1; }
+
+# Only after both reference checks above came back empty.
+aws ec2 delete-security-group --group-id sg-076c916a807936cee --region us-east-2
+```
+
+If that returns `DependencyViolation`, something still references it — go back to
+the reference checks rather than forcing it.
+
+- [ ] `sg-076c916a807936cee` deleted, or the blocking dependency identified
+
+Then the state object, per the scenario (a) commands below — the cleanup is
+identical.
+
+---
 
 **Scenario (a)** — the ARN belongs to the ALB now named `crm-alb`, and no extra
 load balancer exists. Nothing is running unprotected. Remove the stale state so
@@ -825,33 +917,78 @@ came from osTicket, not from the load balancer.** If osTicket is configured with
 an `https://` helpdesk URL it will redirect there — and there is no 443 listener
 on this ALB, so that redirect is a dead end for real users.
 
-Get the redirect target before concluding anything:
+**Measured 2026-08-10 — this is the bad branch:**
 
 ```bash
-curl -sSI -H 'Host: osticket.insightgrouppr.com' \
-  http://osticket-alb-343594101.us-east-2.elb.amazonaws.com/ \
-  | grep -i '^location:'
+$ curl -sSI -H 'Host: osticket.insightgrouppr.com' \
+    http://osticket-alb-343594101.us-east-2.elb.amazonaws.com/ | grep -i '^location:'
+Location: https://osticket.insightgrouppr.com/
 ```
 
-- [ ] Recorded the `Location` value
+- [x] Recorded the `Location` value
 
-| `Location` | Meaning |
+**osTicket redirects to HTTPS, and this ALB has no HTTPS listener.** `enable_https
+= false` → `certificate_arn` empty → the `alb` module creates no `aws_lb_listener`
+on 443. The request chain for a real user is:
+
+```
+GET http://osticket.insightgrouppr.com/
+  -> ALB :80 forwards to 10.12.1.67:80
+  -> osTicket 301 -> https://osticket.insightgrouppr.com/
+  -> ALB :443  ... no listener. Connection refused.
+```
+
+**The portal is unusable through this ALB.** Not degraded — unusable, for every
+request that follows the redirect, which is every browser.
+
+#### Does that mean it is down right now? Depends on DNS
+
+```bash
+# `dig` is not installed on stock macOS shells. Any of these works:
+nslookup osticket.insightgrouppr.com
+
+# or, no external tooling:
+python3 -c "import socket,sys
+h='osticket.insightgrouppr.com'
+try:
+    print(socket.gethostbyname_ex(h))
+except Exception as e:
+    print('does not resolve:', e)"
+
+# or via DNS-over-HTTPS, which also shows the record type:
+curl -s -H 'accept: application/dns-json' \
+  'https://cloudflare-dns.com/dns-query?name=osticket.insightgrouppr.com&type=CNAME' | jq .
+```
+
+- [ ] Recorded what the hostname resolves to
+
+| Resolves to | Situation |
 |---|---|
-| `https://osticket.insightgrouppr.com/...` | **The portal is effectively down for end users.** The app redirects to HTTPS and this ALB has no HTTPS listener. Fix is step 8 — cert validation, then `enable_https = true`. |
-| `http://osticket.insightgrouppr.com/...` | Benign canonical-host redirect. Portal works. |
-| `.../scp/` or another path on the same scheme and host | Normal osTicket behaviour. Portal works. |
+| `osticket-alb-343594101.us-east-2.elb.amazonaws.com` | **Live outage.** Users get a redirect to a port with no listener. Fix is urgent — see below. |
+| The old Lightsail address | Not an outage, but **the migration has not cut over.** The WAF is protecting an ALB nobody is using, so `osticket-alb-waf` is not in front of real user traffic yet. Fix before cutover. |
+| Nothing / NXDOMAIN | Nobody can reach it by hostname at all. Same as above — fix before cutover. |
 
-Also confirm whether anyone is actually pointed at this ALB yet:
+**Either way this is now blocking**, and it changes the priority of one item that
+was previously filed as cosmetic: **the ACM validation CNAME in step 8a is on the
+critical path.** Without the certificate there is no 443 listener, and without the
+443 listener osTicket's redirect has nowhere to land.
 
-```bash
-dig +short osticket.insightgrouppr.com
-```
+#### If DNS points at the ALB and the portal is down now
 
-- [ ] Recorded what the hostname resolves to — the ALB, the old Lightsail address, or nothing
+The correct fix is step 8 — get the cert validated, then `enable_https = true`.
+That needs Insight Group's DNS administrator, so it is not instant.
 
-If it does not resolve to `osticket-alb-343594101.us-east-2.elb.amazonaws.com`,
-then nobody is using this path yet and none of the above is user-facing. Still
-fix it before cutover.
+Stopgaps, in order of preference, if the portal must work before the cert lands:
+
+1. **Point DNS back at the old Lightsail host**, if it is still running. Reverts to
+   the pre-migration state. No WAF, but a working help desk.
+2. **Turn off osTicket's HTTPS redirect** so it serves over plain HTTP through the
+   ALB. This works, but it means credentials submitted to the ticket portal
+   travel unencrypted, and it is the reason the redirect exists. Only acceptable
+   as a short, deliberate, time-boxed measure — and it is worse than option 1.
+
+Do **not** reach for a self-signed or unrelated certificate on the 443 listener;
+browsers will refuse it and the SOW's own HTTPS position gets muddier.
 
 #### Confirm the cause on the instance
 
