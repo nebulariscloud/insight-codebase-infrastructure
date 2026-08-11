@@ -14,8 +14,8 @@ Work top to bottom. Steps marked **[HUMAN]** are conversations or sessions with 
 | Step 4 | Custom rules review | **Insight Group** (4 owner conversations) |
 | Step 5 | Two training sessions | Both |
 | ~~Step 6~~ | ~~Log delivery + alarm inventory~~ | **DONE 2026-08-10** |
-| Step 7 | Orphaned `icc-alb` state — **security question closed**, cleanup left | Nebularis |
-| Step 8 | osTicket HTTPS, plus **8d: the HTTP 500** | Insight Group's DNS admin, then Nebularis |
+| ~~Step 7~~ | ~~Orphaned `icc-alb` state~~ | **DONE 2026-08-10** |
+| Step 8 | osTicket HTTPS + **8d, two latent faults**. Cutover prerequisite, not urgent | Insight Group's DNS admin, then Nebularis |
 | Step 9 | crm / osticket baselines | Nebularis, after a week of data |
 
 Steps 6 and 7 were added after a wider verification round on 2026-08-10 found that two of the four Web ACLs had never delivered a log record, and that an orphaned state file claims 13 resources. Detail in `waf-verification-report.md`.
@@ -27,20 +27,20 @@ Steps 6 and 7 were added after a wider verification round on 2026-08-10 found th
 - **Account-wide load balancer enumeration: 7 LBs, 4 ALBs, all four with a Web ACL, no `icc-alb`.** The orphaned state does not correspond to a live unprotected endpoint. Step 7 drops from "possible security exposure" to state cleanup.
 - **PRs #58, #69 and #70 all merged**; nothing open.
 - **Step 1: everything checkable by command has passed.** Dashboard exists, body references only `AWS/WAFV2`, all four Web ACLs returning datapoints. Only the console eyeball is left.
-- **Step 7 resolved to scenario (c)** — the `icc-alb` ALB is gone, so nothing was running unprotected. But the destroy was **partial**: `icc-alb-sg` (`sg-076c916a807936cee`) survives, unmanaged. Delete the SG before the state object, since the state is the only record of what `icc-alb` consisted of.
+- **Step 7 DONE.** Resolved to scenario (c) — the `icc-alb` load balancer was already destroyed, and the destroy had been partial. `icc-alb-sg` (`sg-076c916a807936cee`) deleted, state object and lock digest removed, backup taken. Certificate inventory clean: four certs, all accounted for.
 
-> ### ⚠️ osTicket is broken through the ALB — step 8d
+> ### osTicket has two latent faults — step 8d. **Cutover prerequisite, not an outage.**
 >
-> Not a WAF defect, but the most serious thing on this list.
+> Not a WAF defect. And not urgent: `osticket.insightgrouppr.com` has not been pointed at this load balancer, and the validation CNAME is deliberately deferred to cutover. The help desk is still on the pre-migration host.
 >
-> - The target group has been **unhealthy** the whole time (`Target.ResponseCodeMismatch`); the ALB has been failing open, so nobody noticed.
-> - osTicket **301s to `https://osticket.insightgrouppr.com/`**, and this ALB has **no 443 listener** because `enable_https = false`. Every browser following that redirect hits a closed port.
+> - The target group is **unhealthy** (`Target.ResponseCodeMismatch`); the load balancer has been failing open, which is why nobody noticed.
+> - osTicket **301s to `https://osticket.insightgrouppr.com/`**, and there is **no 443 listener** because `enable_https = false`. A browser following that redirect hits a closed port.
 >
-> **This puts the ACM validation CNAME in step 8a on the critical path.** It was previously filed as a cosmetic follow-up. Without the cert there is no 443 listener, and without the listener the redirect has nowhere to land.
+> Both are harmless today and both break the help desk the moment DNS moves. **Fix them before the cutover window, not during it** — steps 1–3 of the cutover ordering in 8d are reversible and do not touch the live help desk.
 >
-> Whether it is a *live* outage depends on what `osticket.insightgrouppr.com` resolves to — see step 8d.
+> Consequence for the SOW record: `osticket-alb-waf` is deployed, attached, logging and alarming, but until DNS moves it is inspecting test traffic rather than real users. Stated plainly in `waf-sow-closeout.md`.
 
-**Priority order:** step 8d (finish the DNS check, then decide urgency), then step 1 (open the dashboard, last item on acceptance criterion 4), then step 2 (the ~30 minute runbook exercise). Step 7 is tidying. Steps 3–5 need Insight Group.
+**Priority order:** step 1 (open the dashboard — last item on acceptance criterion 4), then step 2 (the ~30 minute runbook exercise). Those two are all that gate SOW sign-off on our side. Step 8d moves to the osTicket migration checklist. Steps 3–5 need Insight Group.
 
 ---
 
@@ -597,7 +597,62 @@ V8 is already recorded as Pass in `waf-verification-record.md` and
 
 ---
 
-## Step 7 — Clean up the orphaned `icc-alb` state
+## Step 7 — Clean up the orphaned `icc-alb` state — **DONE 2026-08-10**
+
+> **COMPLETE.** Resolved to scenario (c): the `icc-alb` load balancer was already
+> destroyed. The destroy had been partial, leaving `icc-alb-sg`
+> (`sg-076c916a807936cee`) behind. Both the security group and the state object
+> are now removed:
+>
+> ```
+> $ aws ec2 delete-security-group --group-id sg-076c916a807936cee
+> {"Return": true, "GroupId": "sg-076c916a807936cee"}
+>
+> $ aws s3 cp s3://.../live/perimeter/icc-alb/terraform.tfstate ./icc-alb-orphan-state-backup.json
+> $ aws s3 rm s3://.../live/perimeter/icc-alb/terraform.tfstate
+> $ aws dynamodb delete-item --table-name lza-terraform-locks \
+>     --key '{"LockID":{"S":".../live/perimeter/icc-alb/terraform.tfstate-md5"}}'
+> ```
+>
+> `delete-security-group` returning `Return: true` rather than
+> `DependencyViolation` is the authoritative confirmation that nothing referenced
+> it — better than any query, because AWS checks every reference type including
+> ones a targeted `describe` call would miss.
+>
+> Certificate inventory afterwards shows exactly four, all accounted for, no
+> `icc-alb` leftover:
+>
+> | Domain | Status | InUse |
+> |---|---|---|
+> | `wazuh.insightgrouppr.com` | ISSUED | true |
+> | `sc.insightgrouppr.com` | ISSUED | true |
+> | `crm.insightgrouppr.com` | ISSUED | true |
+> | `osticket.insightgrouppr.com` | PENDING_VALIDATION | false |
+>
+> The backup is at `./icc-alb-orphan-state-backup.json` on the operator's
+> machine. **It is the only remaining record of what `icc-alb` consisted of** —
+> worth parking somewhere durable rather than leaving in a home directory.
+
+### Caveat on the reference checks, for next time
+
+The `describe-security-groups` query below only searches **one account**. Security
+groups can be referenced across accounts over a peered VPC, or over a same-region
+Transit Gateway with security group referencing enabled, and a single-account query
+would never see it.
+
+It did not matter here — the `alb` module writes CIDR-only rules (`cidr_ipv4`,
+never `referenced_security_group_id`), and the only SG-to-SG references anywhere in
+`terraform/` are to `var.eice_security_group_id`, the EC2 Instance Connect Endpoint
+group in Production. Nothing references a perimeter ALB security group.
+
+**But do not rely on the query for that conclusion.** Attempt the delete and let
+AWS answer: `delete-security-group` is non-destructive on failure, returning
+`DependencyViolation` and changing nothing. That is the check that cannot be
+incomplete.
+
+---
+
+### Original investigation, retained for the record
 
 > **The security question here is already answered: there is no stray load
 > balancer.** An account-wide enumeration on 2026-08-10 returned seven load
@@ -719,8 +774,9 @@ aws ec2 describe-security-groups --region us-east-2 \
   --output table
 ```
 
-- [ ] No network interfaces
-- [ ] No other security group references it in a rule
+- [x] No network interfaces — empty
+- [x] No other security group in Perimeter references it in a rule — empty
+- [x] Confirmed authoritatively by `delete-security-group` returning `Return: true`
 
 The cert also deserves a wider look — the state resource was named
 `aws_acm_certificate.icc`, but the *domain* on it may not contain the string
@@ -731,10 +787,26 @@ aws acm list-certificates --region us-east-2 \
   --query 'CertificateSummaryList[].[CertificateArn,DomainName,Status,InUse]' --output table
 ```
 
-- [ ] Accounted for every certificate listed; noted any unused one left over from `icc-alb`
+- [x] Accounted for every certificate listed — four, no `icc-alb` leftover
 
 An unused ACM certificate is free and harmless. Worth deleting for tidiness, but
 **never delete one that reports `InUse: true`.**
+
+**Note on `crm.insightgrouppr.com`.** The live `crm-alb` leaf creates
+`aws_acm_certificate.icc` — the same resource *name* the orphaned state carried,
+because `crm-alb` was built from the `icc-alb` leaf. That certificate is `ISSUED`
+and `InUse: true`, and the live `crm-alb` state manages it. Nothing was left
+unmanaged by removing the old state object.
+
+If the ARN in the backup matches `6d298cce-fc8e-4388-ae8c-a7566fa91c16`, then the
+two states were both claiming one live certificate — a genuine dual-management
+condition, now resolved with `crm-alb` as sole owner. Optional, purely for the
+record, no action depends on it:
+
+```bash
+jq -r '.resources[] | select(.type=="aws_acm_certificate") | .instances[].attributes.arn' \
+  ./icc-alb-orphan-state-backup.json
+```
 
 ### 7b. Act on the answer
 
@@ -753,7 +825,7 @@ aws ec2 delete-security-group --group-id sg-076c916a807936cee --region us-east-2
 If that returns `DependencyViolation`, something still references it — go back to
 the reference checks rather than forcing it.
 
-- [ ] `sg-076c916a807936cee` deleted, or the blocking dependency identified
+- [x] `sg-076c916a807936cee` deleted — `{"Return": true}`, no `DependencyViolation`
 
 Then the state object, per the scenario (a) commands below — the cleanup is
 identical.
@@ -783,8 +855,8 @@ Deleting a state object is irreversible and the bucket may or may not be
 versioned — **take the backup first, and confirm the ARN comparison before
 running the removal.**
 
-- [ ] Backup taken
-- [ ] State object and lock digest removed
+- [x] Backup taken — `./icc-alb-orphan-state-backup.json`
+- [x] State object and lock digest removed
 
 **Scenario (c)** — the ARN does not resolve. The resources are already gone and
 the state is purely stale. Same cleanup as (a).
@@ -796,7 +868,7 @@ flow — recreate a minimal leaf pointing at the existing state, then apply a
 destroy with explicit `ALLOW-DESTROY`. Never delete it out of band, because that
 leaves the same orphaned-state problem behind.
 
-- [ ] Outcome recorded in `waf-verification-record.md` under V10, and V10 updated in `waf-verification-report.md`
+- [x] Outcome recorded in `waf-verification-record.md` under V10 and in `waf-verification-report.md` Correction 4
 
 ---
 
@@ -941,7 +1013,34 @@ GET http://osticket.insightgrouppr.com/
 **The portal is unusable through this ALB.** Not degraded — unusable, for every
 request that follows the redirect, which is every browser.
 
-#### Does that mean it is down right now? Depends on DNS
+#### Is it down right now? No — this is pre-cutover
+
+**Confirmed by the operator 2026-08-10:** `osticket.insightgrouppr.com` has not been
+pointed at this load balancer, and the ACM validation CNAME is **deliberately
+deferred to cutover** rather than overlooked. The help desk is still served by the
+pre-migration host.
+
+So nothing is broken for users, and nothing here is urgent. Two consequences that
+do matter, though:
+
+**1. `osticket-alb-waf` is not yet in front of real user traffic.** The Web ACL is
+deployed, attached, logging and alarming correctly — SOW acceptance criterion 1 is
+satisfied on the load balancer. But until DNS moves, the requests it inspects are
+test traffic. That distinction is stated in `waf-sow-closeout.md` so it is not
+mistaken for the osTicket application being protected today.
+
+**2. Both faults must be fixed *before* cutover, not after.** The redirect-to-nowhere
+and the unhealthy target group are latent. Cut DNS over with either still in place
+and the help desk breaks at the worst possible moment:
+
+- No 443 listener → every browser following osTicket's redirect hits a closed port.
+- Permanently unhealthy target → the load balancer has no health signal at the exact
+  point you most want one.
+
+This is a **cutover prerequisite**, and it belongs on the osTicket migration
+checklist rather than being carried as an open WAF item.
+
+#### If the position changes, confirm with DNS
 
 ```bash
 # `dig` is not installed on stock macOS shells. Any of these works:
@@ -960,35 +1059,36 @@ curl -s -H 'accept: application/dns-json' \
   'https://cloudflare-dns.com/dns-query?name=osticket.insightgrouppr.com&type=CNAME' | jq .
 ```
 
-- [ ] Recorded what the hostname resolves to
+- [ ] Re-confirm before cutover: what the hostname resolves to
 
 | Resolves to | Situation |
 |---|---|
-| `osticket-alb-343594101.us-east-2.elb.amazonaws.com` | **Live outage.** Users get a redirect to a port with no listener. Fix is urgent — see below. |
-| The old Lightsail address | Not an outage, but **the migration has not cut over.** The WAF is protecting an ALB nobody is using, so `osticket-alb-waf` is not in front of real user traffic yet. Fix before cutover. |
-| Nothing / NXDOMAIN | Nobody can reach it by hostname at all. Same as above — fix before cutover. |
+| The pre-migration host, or nothing | **Current state.** Not an outage. Fix both faults before moving DNS. |
+| `osticket-alb-343594101.us-east-2.elb.amazonaws.com` | Cutover has happened. If either fault is still open at that point, the help desk is **down** — redirect to a closed port, and no health signal. |
 
-**Either way this is now blocking**, and it changes the priority of one item that
-was previously filed as cosmetic: **the ACM validation CNAME in step 8a is on the
-critical path.** Without the certificate there is no 443 listener, and without the
-443 listener osTicket's redirect has nowhere to land.
+#### Cutover ordering
 
-#### If DNS points at the ALB and the portal is down now
+Do these in order. The certificate is the long-lead item because it needs Insight
+Group's DNS administrator.
 
-The correct fix is step 8 — get the cert validated, then `enable_https = true`.
-That needs Insight Group's DNS administrator, so it is not instant.
+1. **Validation CNAME added** (step 8a) → cert reaches `ISSUED`.
+2. **`enable_https = true`** (step 8c) → adds the 443 listener and converts the
+   port-80 listener to a redirect. This is what makes osTicket's own redirect land
+   somewhere.
+3. **Health check fixed** (below) → target reports `healthy`, so the load balancer
+   has a real signal before it starts carrying users.
+4. **Then** move `osticket.insightgrouppr.com` to the load balancer.
 
-Stopgaps, in order of preference, if the portal must work before the cert lands:
+Steps 1–3 are all reversible and none of them affect the currently-live help desk,
+so they can be done well ahead of the cutover window. Doing them *during* the window
+is how a cutover turns into an outage.
 
-1. **Point DNS back at the old Lightsail host**, if it is still running. Reverts to
-   the pre-migration state. No WAF, but a working help desk.
-2. **Turn off osTicket's HTTPS redirect** so it serves over plain HTTP through the
-   ALB. This works, but it means credentials submitted to the ticket portal
-   travel unencrypted, and it is the reason the redirect exists. Only acceptable
-   as a short, deliberate, time-boxed measure — and it is worse than option 1.
-
-Do **not** reach for a self-signed or unrelated certificate on the 443 listener;
-browsers will refuse it and the SOW's own HTTPS position gets muddier.
+If for some reason the portal has to go live on this load balancer before the
+certificate lands, the only tolerable stopgap is disabling osTicket's HTTPS
+redirect so it serves over plain HTTP — which means credentials travel unencrypted,
+and is exactly why the redirect exists. Time-box it and treat it as a known risk.
+Do **not** put a self-signed or unrelated certificate on the 443 listener; browsers
+will refuse it.
 
 #### Confirm the cause on the instance
 
@@ -1134,18 +1234,15 @@ Then set per-ACL thresholds at roughly 1.5–2× observed peak in `terraform/liv
 
 ## Definition of done
 
-SOW is signable when **Steps 1–6** are complete. **Step 6 is done.**
+SOW is signable when **Steps 1–6** are complete. **Step 6 and Step 7 are both done.**
 
-That leaves **step 1** (open the dashboard) and **step 2** (the runbook exercise) on the gating list — plus steps 3, 4 and 5, which need Insight Group.
+That leaves exactly two items on the Nebularis side:
 
-**Step 7 no longer gates sign-off.** It was in the gating set while it might have been an unprotected public load balancer. The account-wide enumeration ruled that out, so it is state cleanup — do it, but it does not hold up the SOW.
+1. **Step 1** — open the dashboard, confirm the widgets populate. Everything checkable by command has already passed, so this is a five-minute look.
+2. **Step 2** — the ~30 minute runbook exercise.
 
-Steps 8–10 are operational follow-ups. Step 8 is worth prioritising anyway: the ticket portal is on plain HTTP, which is a live exposure even though it is not a WAF defect, and **8d may mean the portal is not working at all.**
+Then the four that need Insight Group: Bot Control, custom rules, and the two training sessions (steps 3, 4, 5).
 
-**Shortest path to signable:**
+**Step 8 is a cutover prerequisite for the osTicket migration, not a WAF sign-off item.** Nothing there is currently user-facing — DNS still points at the pre-migration host — but both faults in 8d must be closed before DNS moves. Track it on the migration checklist.
 
-1. **Step 8d** — two commands. Is the ticket portal actually serving? Do this first; it is the only thing on the list that might be an active outage.
-2. **Step 1** — open the dashboard, confirm the widgets populate.
-3. **Step 2** — the ~30 minute runbook exercise.
-
-Then the four Insight Group items: Bot Control, custom rules, and the two training sessions.
+Steps 9 and 10 are operational follow-ups that gate nothing.
