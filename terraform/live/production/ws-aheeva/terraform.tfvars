@@ -42,11 +42,36 @@ instance_type = "t3a.medium"
 # See docs/07-Operations/ws-aheeva-migration-plan.md.
 ami_id = "ami-0afa2a16db667ea10"
 
-# key_name is deliberately NOT set. On Windows it only does something for AMIs
-# prepared with Sysprep/EC2Launch, where it decrypts a generated Administrator
-# password. This is a lift-and-shift of a live box, so the EXISTING Windows
-# credentials come across inside the image and are the only way in. Get the current
-# local Administrator password from the client before cutover.
+# A key pair does nothing on its own for a lift-and-shift Windows image — the AMI is
+# not Sysprepped, so no Administrator password is generated to decrypt, and the
+# EXISTING Windows credentials inside the image are the way in.
+#
+# It is attached anyway, because it is the prerequisite for the recovery path.
+# `AWSSupport-ResetAccess` works on an instance that is NOT SSM-managed (it stops
+# the box, attaches the root volume to its own helper, and has EC2Rescue enable
+# password generation) — but the password it generates is decrypted with **the key
+# pair assigned to the instance**. No key pair, nothing to decrypt it with, no
+# recovery path.
+#
+# Attaching it forces an instance replacement, which is why it is being done NOW,
+# while the box is a throwaway rehearsal holding nothing of value. After the FTPS
+# configuration work, the same change would be genuinely expensive.
+key_name = "ws-aheeva-admin"
+
+# ⚠️ TEMPORARY — DIAGNOSTIC. Revert to true (or delete this line) once the in-box
+# SSM agent is confirmed working and upgraded.
+#
+# The instance came up running, 2/2 status checks, correct instance profile
+# (EC2-Default-SSM-Role), in a subnet where SSM demonstrably works — ddhelper is
+# managed at 10.12.1.16 — with a clean Windows lock screen on the console, and it
+# still had not registered 30+ minutes after boot. The leading explanation is an SSM
+# agent too old to fetch an IMDSv2 token, which is entirely plausible on a box
+# administered over RDP that was never enrolled in SSM.
+#
+# IMDSv1 being reachable without a token is what makes SSRF-to-credential-theft
+# possible, so this is a real regression, mitigated only by the box being private
+# with no public IP. It is a test, not a resting state.
+imdsv2_required = false
 
 vpc_id    = "vpc-04a8720d0ddb40713"
 subnet_id = "subnet-00d31cac6422417c4" # shared-prod-app-a

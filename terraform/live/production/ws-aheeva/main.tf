@@ -54,6 +54,77 @@ locals {
 
   ingress_rules   = concat(local.ftps_rules, local.extra_rules)
   ebs_kms_key_arn = var.ebs_kms_key_arn != "" ? var.ebs_kms_key_arn : data.aws_kms_key.ebs.arn
+
+  #############################################################################
+  # SSM agent bootstrap.
+  #
+  # This box came up healthy — running, 2/2 status checks, correct instance
+  # profile, in a subnet where SSM demonstrably works (ddhelper is managed at
+  # 10.12.1.16) — and sat there 30+ minutes without ever registering. So the
+  # agent is missing, stopped, or too old to fetch an IMDSv2 token.
+  #
+  # Without SSM there is no way into this box at all: it is Windows, so there is
+  # no SSH fallback, and the Administrator password is not in our hands. Session
+  # Manager was the one path that did not need it, because it runs as SYSTEM.
+  #
+  # Opportunistic, NOT a guarantee. On an image that was never Sysprepped,
+  # EC2Launch/EC2Config may treat user data as already consumed and skip it.
+  # <persist>true</persist> gives it a chance on this and later boots. If it does
+  # not run, nothing is lost — the key-pair + AWSSupport-ResetAccess path stands.
+  #
+  # Written to survive an old box:
+  #   - Net.WebClient, because Invoke-WebRequest does not exist on PowerShell 2.0
+  #   - TLS 1.2 forced, because older Windows defaults to 1.0 and S3 refuses it
+  #   - idempotent: installs only when the service is genuinely absent, so it is
+  #     harmless on every subsequent boot
+  #   - logs to C:\Windows\Temp\ssm-bootstrap.log, the first thing to read once
+  #     we have a shell
+  #
+  # NOTE: user data is readable from IMDS, and IMDSv1 is temporarily permitted on
+  # this instance, so nothing secret may ever go in here. This contains no
+  # credentials.
+  #############################################################################
+  ssm_agent_bootstrap = <<-EOT
+    <powershell>
+    $ErrorActionPreference = 'Continue'
+    $log = 'C:\Windows\Temp\ssm-bootstrap.log'
+    function Write-Log($m) { "$(Get-Date -Format s)  $m" | Out-File -FilePath $log -Append -Encoding utf8 }
+
+    Write-Log 'ssm bootstrap starting'
+
+    try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 }
+    catch { Write-Log 'could not set TLS 1.2; continuing' }
+
+    $svc = Get-Service -Name AmazonSSMAgent -ErrorAction SilentlyContinue
+
+    if (-not $svc) {
+      Write-Log 'AmazonSSMAgent service not present - downloading installer'
+      $url = 'https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/windows_amd64/AmazonSSMAgentSetup.exe'
+      $exe = 'C:\Windows\Temp\AmazonSSMAgentSetup.exe'
+      try {
+        (New-Object Net.WebClient).DownloadFile($url, $exe)
+        Write-Log 'download ok - installing quietly'
+        Start-Process -FilePath $exe -ArgumentList '/quiet','/norestart' -Wait
+        Write-Log 'installer finished'
+      } catch {
+        Write-Log "install failed: $($_.Exception.Message)"
+      }
+    } else {
+      Write-Log "AmazonSSMAgent present, status $($svc.Status)"
+    }
+
+    try {
+      Set-Service -Name AmazonSSMAgent -StartupType Automatic
+      Start-Service -Name AmazonSSMAgent -ErrorAction SilentlyContinue
+      Write-Log "service set Automatic, status now $((Get-Service AmazonSSMAgent).Status)"
+    } catch {
+      Write-Log "could not start service: $($_.Exception.Message)"
+    }
+
+    Write-Log 'ssm bootstrap done'
+    </powershell>
+    <persist>true</persist>
+  EOT
 }
 
 data "aws_kms_key" "ebs" {
@@ -79,7 +150,8 @@ module "ec2_migrated" {
   root_volume_type       = "gp3"
   root_volume_kms_key_id = local.ebs_kms_key_arn
 
-  imdsv2_required         = true
+  user_data               = local.ssm_agent_bootstrap
+  imdsv2_required         = var.imdsv2_required
   monitoring              = false # ec2:MonitorInstances not in the TF allow-policy
   ebs_optimized           = true
   disable_api_termination = true
