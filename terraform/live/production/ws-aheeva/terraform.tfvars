@@ -58,20 +58,23 @@ ami_id = "ami-0afa2a16db667ea10"
 # configuration work, the same change would be genuinely expensive.
 key_name = "ws-aheeva-admin"
 
-# ⚠️ TEMPORARY — DIAGNOSTIC. Revert to true (or delete this line) once the in-box
-# SSM agent is confirmed working and upgraded.
+# imdsv2_required is left at its default of TRUE.
 #
-# The instance came up running, 2/2 status checks, correct instance profile
-# (EC2-Default-SSM-Role), in a subnet where SSM demonstrably works — ddhelper is
-# managed at 10.12.1.16 — with a clean Windows lock screen on the console, and it
-# still had not registered 30+ minutes after boot. The leading explanation is an SSM
-# agent too old to fetch an IMDSv2 token, which is entirely plausible on a box
-# administered over RDP that was never enrolled in SSM.
+# It was temporarily set false in PR #74 to test whether an SSM agent too old to
+# fetch an IMDSv2 token was the reason this box would not register. **That test came
+# back negative.** The replacement instance (i-00489e263e7eaf005) came up with
+# http_tokens = optional, 2/2 status checks, a clean Windows lock screen, the correct
+# instance profile, in a subnet where SSM demonstrably works — and still did not
+# register. So IMDSv2 was never the blocker: the agent is simply not present, and the
+# user_data that would have installed it did not execute, which is the expected
+# behaviour on an image that was never Sysprepped (EC2Launch treats user data as
+# already consumed).
 #
-# IMDSv1 being reachable without a token is what makes SSRF-to-credential-theft
-# possible, so this is a real regression, mitigated only by the box being private
-# with no public IP. It is a test, not a resting state.
-imdsv2_required = false
+# Keeping IMDSv1 reachable therefore buys nothing, and IMDSv1 without a token is what
+# makes SSRF-to-credential-theft possible. Reverted.
+#
+# The real fix is on the SOURCE box — see docs/07-Operations/ws-aheeva-migration-plan.md
+# Phase 2a. A current agent supports IMDSv2, so this stays true.
 
 vpc_id    = "vpc-04a8720d0ddb40713"
 subnet_id = "subnet-00d31cac6422417c4" # shared-prod-app-a
