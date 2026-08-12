@@ -121,6 +121,17 @@ ftps_passive_from = 40000
 ftps_passive_to   = 40019
 ingress_vpc_cidr  = "10.0.0.0/20"
 
+# ⚠️ TEMPORARY SCAFFOLDING — remove once this box has a working SSM agent.
+#
+# 10.12.1.16 is cti-v7-ddhelper, which IS SSM-managed and sits in this same subnet.
+# This box is not, so the only route in is RDP tunnelled through that bastion with
+# AWS-StartPortForwardingSessionToRemoteHost. Nothing is published to the internet:
+# the source is a private /32 and the tunnel rides ddhelper's outbound SSM channel.
+#
+# ddhelper is on the cleanup list (open-items E2) precisely because it is the last
+# SSM path into this subnet — do not delete it while this is in use.
+admin_rdp_cidrs = ["10.12.1.16/32"]
+
 # Extra ports beyond FTPS. Read from the source SG sg-0236c297e78a62ab2 on
 # 2026-08-07 and deliberately NOT copied wholesale — see README "Source security
 # group" for the full inventory and the reasoning.

@@ -173,6 +173,37 @@ resource "aws_vpc_security_group_ingress_rule" "eice_ssh" {
 }
 
 ###############################################################################
+# Admin RDP from a bastion inside shared-prod.
+#
+# This box has NO working SSM agent (see the migration plan, Phase 2a), so
+# Session Manager cannot reach it and there is no SSH on Windows. The way in is
+# RDP tunnelled through a host that IS SSM-managed — ddhelper at 10.12.1.16 —
+# using AWS-StartPortForwardingSessionToRemoteHost. That still requires this
+# instance to accept 3389 from the bastion.
+#
+# Deliberately a dedicated rule rather than adding 3389 to extra_app_ports:
+# that variable is a cartesian product with extra_app_cidrs, so it would also
+# open 8081 to the bastion and 3389 to CTI v7. Neither is wanted.
+#
+# Nothing is exposed publicly by this. The source is a private /32 inside
+# shared-prod, and the tunnel rides the bastion's own outbound SSM connection.
+#
+# ⚠️ REMOVE once the SSM agent works on this box. It is scaffolding, and 3389
+# reachable from anything is worth having a reason for. Tracked in the migration
+# plan.
+###############################################################################
+resource "aws_vpc_security_group_ingress_rule" "admin_rdp" {
+  for_each = toset(var.admin_rdp_cidrs)
+
+  security_group_id = module.ec2_migrated.security_group_id
+  cidr_ipv4         = each.value
+  from_port         = 3389
+  to_port           = 3389
+  ip_protocol       = "tcp"
+  description       = "Admin RDP from bastion ${each.value} (temporary - no SSM agent)"
+}
+
+###############################################################################
 # Outputs — the perimeter FTPS NLB leaf reads private_ip and targets it.
 ###############################################################################
 
