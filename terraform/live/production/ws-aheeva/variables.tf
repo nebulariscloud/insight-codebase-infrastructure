@@ -112,6 +112,30 @@ variable "ftps_passive_to" {
   default     = 40500
 }
 
+variable "admin_rdp_cidrs" {
+  description = <<-EOT
+    Private CIDRs allowed to reach 3389 on this instance. Intended for a bastion
+    inside shared-prod that IS SSM-managed, so RDP can be tunnelled to it with
+    AWS-StartPortForwardingSessionToRemoteHost without exposing 3389 publicly.
+
+    Empty by default. Only needed while this box has no working SSM agent — remove
+    the value once it does.
+
+    Must be private ranges. A public CIDR here would publish RDP, which is one of
+    the most heavily scanned ports on the internet; the validation below refuses it.
+  EOT
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition = alltrue([
+      for c in var.admin_rdp_cidrs :
+      startswith(c, "10.") || startswith(c, "192.168.") || can(regex("^172\\.(1[6-9]|2[0-9]|3[01])\\.", c))
+    ])
+    error_message = "admin_rdp_cidrs must contain only RFC1918 private ranges. RDP must never be reachable from a public CIDR — tunnel it through an SSM-managed bastion instead."
+  }
+}
+
 variable "imdsv2_required" {
   description = <<-EOT
     Require IMDSv2 (sets http_tokens = "required").
