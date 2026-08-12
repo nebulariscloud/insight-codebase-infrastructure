@@ -12,16 +12,19 @@ module "waf_monitoring" {
 
   name = "perimeter-waf"
 
+  # Keys feed alarm names (perimeter-waf-<key>-<alarm-type>) and are therefore
+  # stable identifiers. Thresholds come from tfvars per Web ACL, falling back to
+  # the module defaults when unset.
   web_acls = {
-    ingress = {
-      name   = var.ingress_web_acl_name
+    for key, acl in var.web_acls : key => {
+      name   = acl.name
       scope  = "REGIONAL"
       region = var.region
-    }
-    scriptcase = {
-      name   = var.scriptcase_web_acl_name
-      scope  = "REGIONAL"
-      region = var.region
+
+      blocked_requests_threshold       = acl.blocked_requests_threshold
+      rate_limit_block_threshold       = acl.rate_limit_block_threshold
+      common_rule_set_block_threshold  = acl.common_rule_set_block_threshold
+      known_bad_inputs_block_threshold = acl.known_bad_inputs_block_threshold
     }
   }
 
@@ -29,12 +32,15 @@ module "waf_monitoring" {
   sns_email_medium = var.sns_email_medium
   sns_email_low    = var.sns_email_low
 
-  # Defaults are intentionally generous so the alarms don't chirp on
-  # background internet noise. After a week of dashboard data, narrow
-  # these by editing terraform.tfvars.
-  blocked_requests_threshold      = 1000
-  rate_limit_block_threshold      = 200
-  common_rule_set_block_threshold = 500
+  # Fallbacks for any Web ACL that does not set its own override in tfvars.
+  # Sized for a low-traffic Web ACL, since a new one added to this leaf is more
+  # likely to resemble scriptcase than the busy ingress ALB. Per-ACL values in
+  # terraform.tfvars are the real configuration — these just stop an unset
+  # threshold from being wildly wrong in either direction.
+  blocked_requests_threshold       = 600
+  rate_limit_block_threshold       = 100
+  common_rule_set_block_threshold  = 400
+  known_bad_inputs_block_threshold = 300
 }
 
 output "sns_topic_high_arn" {
@@ -60,4 +66,9 @@ output "dashboard_name" {
 output "alarm_names" {
   description = "Alarm names for verification."
   value       = module.waf_monitoring.alarm_names
+}
+
+output "effective_thresholds" {
+  description = "Resolved threshold per Web ACL after overrides. Confirms a tfvars override actually took effect instead of silently falling back to the default."
+  value       = module.waf_monitoring.effective_thresholds
 }

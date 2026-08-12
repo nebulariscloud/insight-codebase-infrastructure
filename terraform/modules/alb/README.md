@@ -29,6 +29,9 @@ module "alb" {
   health_check_matcher = "200"
 
   certificate_arn = data.aws_ssm_parameter.cert_arn.value
+  # WAF needs BOTH. enable_waf drives count so it must be known at plan time;
+  # the ARN is resolved at apply. Setting the ARN alone does nothing.
+  enable_waf      = true
   waf_web_acl_arn = module.waf.web_acl_arn
 
   tags = {

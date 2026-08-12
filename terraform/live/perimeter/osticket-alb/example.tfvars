@@ -26,11 +26,11 @@ public_subnet_ids = [
 backend_private_ip = "10.12.1.67"
 osticket_port      = 80
 
-# TODO: confirm the real hostname with the app owner before the first apply —
-# it is baked into the ACM cert, so changing it later means a new cert.
-# The Lightsail box was reached on static IP 204.236.253.33; there may already
-# be a hostname pointing there today that should simply be reused.
-osticket_host = "tickets.insightgrouppr.com"
+# Confirm the real hostname before the first apply — it is baked into the ACM
+# cert, so changing it later replaces the cert. Reuse whatever name already
+# points at the box today. Keep it lowercase; ACM normalises the domain name and
+# a mixed-case value makes the domain_validation_options key not match.
+osticket_host = "osticket.insightgrouppr.com"
 
 # osTicket's "/" usually 302s, so redirects count as healthy.
 health_check_path    = "/"

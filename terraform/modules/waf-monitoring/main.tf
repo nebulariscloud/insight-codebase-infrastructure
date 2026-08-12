@@ -2,10 +2,27 @@
 # WAF monitoring: SNS topics by severity, CloudWatch alarms per Web ACL,
 # and a single dashboard with one row per Web ACL plus a rollup.
 #
-# Metric source: WAF emits metrics under the AWS/WAFv2 namespace with
+# Metric source: WAF emits metrics under the AWS/WAFV2 namespace with
 # dimensions { WebACL, Region, Rule }. Rule = the rule's name set by the
 # Web ACL (e.g. "AWS-CommonRuleSet", "RateLimit", "AllowList") or "ALL"
 # for the per-WebACL aggregate.
+#
+# !! NAMESPACE CASING — DO NOT "CORRECT" THIS TO AWS/WAFv2 !!
+#
+# The namespace is "AWS/WAFV2" with a capital V. Per the AWS WAF developer
+# guide (Viewing metrics and dimensions): "The AWS WAF namespace is
+# AWS/WAFV2". CloudWatch namespaces are case-sensitive.
+#
+# This bit us. The original June 2026 delivery of this module used
+# "AWS/WAFv2" (lowercase v). Because every alarm here also sets
+# treat_missing_data = "notBreaching", all six alarms reported OK forever
+# and every dashboard widget rendered empty — the monitoring looked healthy
+# while watching a namespace that does not exist. Discovered 2026-08-06 when
+# `list-metrics --namespace AWS/WAFv2` returned [] while the ALBs were
+# demonstrably serving traffic.
+#
+# If you ever need to confirm the namespace is live:
+#   aws cloudwatch list-metrics --namespace AWS/WAFV2 --region <region>
 ###############################################################################
 
 locals {
@@ -20,6 +37,18 @@ locals {
 
   # Dashboard widget grid. One row per Web ACL.
   webacl_keys = sort(keys(var.web_acls))
+
+  # Resolve each Web ACL's effective thresholds: its own override if set,
+  # otherwise the module-level default. Keeps the alarm blocks below readable
+  # and puts the fallback logic in exactly one place.
+  thresholds = {
+    for key, acl in var.web_acls : key => {
+      blocked_total    = coalesce(acl.blocked_requests_threshold, var.blocked_requests_threshold)
+      rate_limit       = coalesce(acl.rate_limit_block_threshold, var.rate_limit_block_threshold)
+      common_rule_set  = coalesce(acl.common_rule_set_block_threshold, var.common_rule_set_block_threshold)
+      known_bad_inputs = coalesce(acl.known_bad_inputs_block_threshold, var.known_bad_inputs_block_threshold)
+    }
+  }
 }
 
 ###############################################################################
@@ -71,12 +100,12 @@ resource "aws_cloudwatch_metric_alarm" "blocked_total" {
 
   alarm_name          = "${var.name}-${each.key}-blocked-total"
   alarm_description   = "WAF total BlockedRequests on ${each.value.name} above threshold."
-  namespace           = "AWS/WAFv2"
+  namespace           = "AWS/WAFV2"
   metric_name         = "BlockedRequests"
   statistic           = "Sum"
   period              = 300
   evaluation_periods  = var.evaluation_periods
-  threshold           = var.blocked_requests_threshold
+  threshold           = local.thresholds[each.key].blocked_total
   comparison_operator = "GreaterThanThreshold"
   treat_missing_data  = "notBreaching"
 
@@ -97,12 +126,12 @@ resource "aws_cloudwatch_metric_alarm" "rate_limit_blocks" {
 
   alarm_name          = "${var.name}-${each.key}-rate-limit-blocks"
   alarm_description   = "WAF RateLimit rule blocked requests on ${each.value.name} - likely sustained abuse."
-  namespace           = "AWS/WAFv2"
+  namespace           = "AWS/WAFV2"
   metric_name         = "BlockedRequests"
   statistic           = "Sum"
   period              = 300
   evaluation_periods  = var.evaluation_periods
-  threshold           = var.rate_limit_block_threshold
+  threshold           = local.thresholds[each.key].rate_limit
   comparison_operator = "GreaterThanThreshold"
   treat_missing_data  = "notBreaching"
 
@@ -123,12 +152,12 @@ resource "aws_cloudwatch_metric_alarm" "common_rule_blocks" {
 
   alarm_name          = "${var.name}-${each.key}-common-ruleset-blocks"
   alarm_description   = "WAF AWS-CommonRuleSet block count on ${each.value.name} above baseline."
-  namespace           = "AWS/WAFv2"
+  namespace           = "AWS/WAFV2"
   metric_name         = "BlockedRequests"
   statistic           = "Sum"
   period              = 300
   evaluation_periods  = var.evaluation_periods
-  threshold           = var.common_rule_set_block_threshold
+  threshold           = local.thresholds[each.key].common_rule_set
   comparison_operator = "GreaterThanThreshold"
   treat_missing_data  = "notBreaching"
 
@@ -136,6 +165,124 @@ resource "aws_cloudwatch_metric_alarm" "common_rule_blocks" {
     WebACL = each.value.name
     Region = each.value.region
     Rule   = "AWS-CommonRuleSet"
+  }
+
+  alarm_actions = [aws_sns_topic.medium.arn]
+  ok_actions    = [aws_sns_topic.medium.arn]
+  tags          = local.default_tags
+}
+
+###############################################################################
+# Known Bad Inputs blocks - medium.
+#
+# Second of the two "somebody is probing the application" signals, alongside
+# CommonRuleSet. Catches known exploit payloads against common CVEs.
+#
+# Deliberately NOT alarmed on: AWS-IPReputation. Measured 2026-08-08, that rule
+# is ~65% of all blocks on ingress-alb-waf (peak 1712 of ~2464) because it
+# catches botnet and mass-scanner traffic. That is WAF working correctly on
+# commodity noise, and alarming on it produces pure alert fatigue. It remains
+# visible on the dashboard.
+###############################################################################
+
+resource "aws_cloudwatch_metric_alarm" "known_bad_inputs_blocks" {
+  for_each = var.enable_known_bad_inputs_alarm ? var.web_acls : {}
+
+  alarm_name          = "${var.name}-${each.key}-known-bad-inputs-blocks"
+  alarm_description   = "WAF AWS-KnownBadInputs block count on ${each.value.name} above baseline - likely targeted exploit attempts."
+  namespace           = "AWS/WAFV2"
+  metric_name         = "BlockedRequests"
+  statistic           = "Sum"
+  period              = 300
+  evaluation_periods  = var.evaluation_periods
+  threshold           = local.thresholds[each.key].known_bad_inputs
+  comparison_operator = "GreaterThanThreshold"
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    WebACL = each.value.name
+    Region = each.value.region
+    Rule   = "AWS-KnownBadInputs"
+  }
+
+  alarm_actions = [aws_sns_topic.medium.arn]
+  ok_actions    = [aws_sns_topic.medium.arn]
+  tags          = local.default_tags
+}
+
+###############################################################################
+# Dead-man's switch: "is this Web ACL publishing metrics at all?"
+#
+# Every alarm above uses treat_missing_data = "notBreaching", which is correct
+# for a *threshold* alarm (no blocks is good news) but means a
+# silently-misconfigured alarm is indistinguishable from a healthy one. That is
+# exactly how the AWS/WAFv2-vs-AWS/WAFV2 namespace typo survived seven weeks
+# in production reporting all-OK.
+#
+# This alarm inverts the logic:
+#   - metric  : AllowedRequests, which is non-zero whenever traffic flows
+#   - operator: LessThanThreshold 1
+#   - missing : "breaching"  <-- the whole point
+#
+# So it fires if the Web ACL stops seeing traffic OR if the metric cannot be
+# resolved at all. Either way a human finds out instead of trusting a green
+# dashboard that is watching nothing.
+#
+# !! WHY period = 3600 AND NOT 300 !!
+#
+# Per the AWS WAF developer guide (AWS WAF core metrics), EVERY WAF metric has
+# "Reporting criteria: There is a nonzero value." WAF does not publish zeros —
+# a quiet interval produces NO datapoint at all, which this alarm treats as
+# breaching.
+#
+# At 5-minute granularity that makes the alarm unusable on low-traffic
+# resources. Measured 2026-08-06: scriptcase-lb served 20 requests in 3 hours,
+# roughly one every nine minutes, so most 5-minute windows are legitimately
+# empty and the alarm would flap constantly.
+#
+# Aggregating to 1 hour fixes it: at ~7 requests/hour scriptcase still reports
+# a nonzero AllowedRequests value every period, while a genuinely dead metric
+# pipeline still produces nothing and still fires. Trade-off is detection
+# latency (hours, not minutes) — acceptable, because this alarm exists to catch
+# silent misconfiguration, not to page on live attacks. The threshold alarms
+# above keep their 5-minute period for that.
+###############################################################################
+
+resource "aws_cloudwatch_metric_alarm" "metric_liveness" {
+  for_each = var.enable_liveness_alarm ? var.web_acls : {}
+
+  alarm_name        = "${var.name}-${each.key}-no-metrics"
+  alarm_description = <<-EOT
+    ${each.value.name} has published no AllowedRequests datapoints for
+    ${var.liveness_evaluation_periods} consecutive 1-hour periods.
+
+    Either the resource genuinely stopped receiving traffic, or the WAF
+    metric plumbing is broken (wrong namespace/dimensions, Web ACL detached
+    from its load balancer, Web ACL deleted). Check in this order:
+      1. aws cloudwatch list-metrics --namespace AWS/WAFV2 --region ${each.value.region}
+      2. aws wafv2 get-web-acl-for-resource --resource-arn <alb-arn>
+      3. ALB RequestCount in AWS/ApplicationELB (is traffic arriving at all?)
+  EOT
+
+  namespace   = "AWS/WAFV2"
+  metric_name = "AllowedRequests"
+  statistic   = "Sum"
+
+  # 1 hour, NOT 300 — see the long note above. WAF publishes no datapoint for
+  # a zero-traffic interval, so short periods make this flap on quiet sites.
+  period              = 3600
+  evaluation_periods  = var.liveness_evaluation_periods
+  threshold           = 1
+  comparison_operator = "LessThanThreshold"
+
+  # The inversion that makes this a dead-man's switch. Do not change to
+  # notBreaching — that would defeat the entire purpose of this alarm.
+  treat_missing_data = "breaching"
+
+  dimensions = {
+    WebACL = each.value.name
+    Region = each.value.region
+    Rule   = "ALL"
   }
 
   alarm_actions = [aws_sns_topic.medium.arn]
@@ -168,7 +315,7 @@ locals {
           view    = "timeSeries"
           stacked = true
           metrics = [
-            ["AWS/WAFv2", "AllowedRequests", "WebACL", var.web_acls[key].name, "Region", var.web_acls[key].region, "Rule", "ALL"],
+            ["AWS/WAFV2", "AllowedRequests", "WebACL", var.web_acls[key].name, "Region", var.web_acls[key].region, "Rule", "ALL"],
             [".", "BlockedRequests", ".", ".", ".", ".", ".", "."],
             [".", "CountedRequests", ".", ".", ".", ".", ".", "."],
           ]
@@ -187,7 +334,7 @@ locals {
           period = 300
           view   = "timeSeries"
           metrics = [
-            ["AWS/WAFv2", "BlockedRequests", "WebACL", var.web_acls[key].name, "Region", var.web_acls[key].region, "Rule", "AWS-CommonRuleSet"],
+            ["AWS/WAFV2", "BlockedRequests", "WebACL", var.web_acls[key].name, "Region", var.web_acls[key].region, "Rule", "AWS-CommonRuleSet"],
             ["...", "AWS-KnownBadInputs"],
             ["...", "AWS-IPReputation"],
             ["...", "AWS-AnonymousIP"],
@@ -213,7 +360,7 @@ locals {
           period = 300
           view   = "singleValue"
           metrics = [
-            ["AWS/WAFv2", "BlockedRequests", "WebACL", var.web_acls[key].name, "Region", var.web_acls[key].region, "Rule", "RateLimit"],
+            ["AWS/WAFV2", "BlockedRequests", "WebACL", var.web_acls[key].name, "Region", var.web_acls[key].region, "Rule", "RateLimit"],
           ]
         }
       },
@@ -236,7 +383,7 @@ locals {
       view   = "timeSeries"
       metrics = [
         for key in local.webacl_keys : [
-          "AWS/WAFv2", "BlockedRequests",
+          "AWS/WAFV2", "BlockedRequests",
           "WebACL", var.web_acls[key].name,
           "Region", var.web_acls[key].region,
           "Rule", "ALL",

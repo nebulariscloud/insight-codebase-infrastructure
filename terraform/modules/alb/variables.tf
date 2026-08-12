@@ -170,8 +170,32 @@ variable "idle_timeout" {
   default     = 60
 }
 
+variable "enable_waf" {
+  description = <<-EOT
+    Whether to create the WAFv2 Web ACL association for this ALB.
+
+    Must be a plain bool rather than being inferred from waf_web_acl_arn,
+    because it drives `count` and therefore has to be known at PLAN time. The
+    ARN usually is not — the documented pattern wires it to a Web ACL created
+    in the same apply (`waf_web_acl_arn = module.waf.web_acl_arn`), which is
+    unknown until that Web ACL exists.
+
+    Set BOTH together:
+
+      enable_waf      = true
+      waf_web_acl_arn = module.waf.web_acl_arn
+  EOT
+  type        = bool
+  default     = false
+}
+
 variable "waf_web_acl_arn" {
-  description = "Optional WAF Web ACL ARN to attach. Use the waf-managed module to produce one."
+  description = <<-EOT
+    WAF Web ACL ARN to associate. Use the waf-managed module to produce one.
+
+    Ignored unless enable_waf = true. Setting this alone does nothing — that is
+    deliberate, see enable_waf.
+  EOT
   type        = string
   default     = ""
 }

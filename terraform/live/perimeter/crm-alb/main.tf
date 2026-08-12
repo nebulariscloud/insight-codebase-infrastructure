@@ -18,6 +18,37 @@
 # the cert can DNS-validate against the external DNS; then flip enable_https.
 ###############################################################################
 
+###############################################################################
+# WAF
+#
+# Same managed-rule baseline as ingress-alb-waf / scriptcase-lb-waf, so all
+# four public ALBs are tuned from one module. Logging and alarms for this Web
+# ACL are wired up in the sibling waf-logs / waf-monitoring leaves — add
+# "crm-alb-waf" to their web_acl_names lists after this applies.
+#
+# Rate limit note: this fronts two APIs on one box. API clients burst harder
+# than browsers, so if the default trips legitimate traffic, raise
+# var.waf_rate_limit rather than dropping the rule.
+###############################################################################
+
+module "waf" {
+  source = "../../../modules/waf-managed"
+
+  name  = "${var.stack_name}-waf"
+  scope = "REGIONAL"
+
+  rate_limit = var.waf_rate_limit
+
+  # Module defaults already Count the four sub-rules that false-positive on
+  # JSON API payloads (EC2MetaDataSSRF_BODY, SizeRestrictions_BODY,
+  # GenericRFI_BODY, GenericRFI_QUERYARGUMENTS). Same list ingress-alb-waf uses.
+
+  tags = {
+    Cluster = "icc-crm"
+    Role    = "crm-alb-waf"
+  }
+}
+
 module "alb" {
   source = "../../../modules/alb"
 
@@ -39,7 +70,8 @@ module "alb" {
   health_check_matcher = var.health_check_matcher
 
   certificate_arn = var.enable_https ? aws_acm_certificate.icc.arn : ""
-  waf_web_acl_arn = var.waf_web_acl_arn
+  enable_waf      = true
+  waf_web_acl_arn = module.waf.web_acl_arn
 
   # Backends are cross-VPC over TGW; disable cross-zone to avoid extra
   # cross-AZ transfer (same call as webapps-alb / sftp-nlb).

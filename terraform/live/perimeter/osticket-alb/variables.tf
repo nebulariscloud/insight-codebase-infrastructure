@@ -95,8 +95,22 @@ variable "enable_https" {
   default     = false
 }
 
-variable "waf_web_acl_arn" {
-  description = "Optional WAF web ACL ARN to associate with the ALB. Empty = none."
-  type        = string
-  default     = ""
+# ----------------------------------------------------------------------------
+# WAF
+#
+# The Web ACL is built in this leaf by the waf-managed module and associated
+# with the ALB, so there is no ARN to pass in. Tuning knobs live here.
+# ----------------------------------------------------------------------------
+
+variable "waf_rate_limit" {
+  description = <<-EOT
+    Requests per 5 minutes per source IP before the rate-based rule blocks.
+    Matches the 2000 used on the other public ALBs.
+
+    A ticket portal sees far lower legitimate request rates than an API, so
+    there is room to tighten this once the traffic baseline is captured. Do
+    that rather than loosening it.
+  EOT
+  type        = number
+  default     = 2000
 }

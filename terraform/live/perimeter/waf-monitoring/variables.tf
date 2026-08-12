@@ -24,16 +24,37 @@ variable "region" {
   default     = "us-east-2"
 }
 
-variable "ingress_web_acl_name" {
-  description = "Name of the ingress-alb Web ACL."
-  type        = string
-  default     = "ingress-alb-waf"
-}
+variable "web_acls" {
+  description = <<-EOT
+    Web ACLs to alarm on and chart, keyed by short id, with optional per-ACL
+    threshold overrides.
 
-variable "scriptcase_web_acl_name" {
-  description = "Name of the scriptcase-lb Web ACL."
-  type        = string
-  default     = "scriptcase-lb-waf"
+    Replaces the previous one-variable-per-Web-ACL shape, which stopped scaling
+    at two. The KEY is baked into alarm names
+    (perimeter-waf-<key>-<alarm-type>), so keys are stable identifiers —
+    renaming one destroys the old alarms and their history. `ingress` and
+    `scriptcase` are kept verbatim for that reason.
+
+    Any threshold left unset falls back to the module default. They are set
+    per-ACL here because measured traffic differs by roughly an order of
+    magnitude between these Web ACLs — see docs/waf/waf-traffic-baseline.md.
+
+    No ARN lookup happens in this leaf (unlike waf-logs), so a Web ACL may be
+    listed before it exists; its alarms simply sit in INSUFFICIENT_DATA until
+    metrics start flowing. That is why crm and osticket can be listed here
+    ahead of their Web ACLs being created by PR #60.
+  EOT
+  type = map(object({
+    name                             = string
+    blocked_requests_threshold       = optional(number)
+    rate_limit_block_threshold       = optional(number)
+    common_rule_set_block_threshold  = optional(number)
+    known_bad_inputs_block_threshold = optional(number)
+  }))
+  default = {
+    ingress    = { name = "ingress-alb-waf" }
+    scriptcase = { name = "scriptcase-lb-waf" }
+  }
 }
 
 variable "sns_email_high" {

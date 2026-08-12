@@ -1,0 +1,50 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "StartSessionOnCtiV7Only",
+      "Effect": "Allow",
+      "Action": "ssm:StartSession",
+      "Resource": "arn:aws:ec2:us-east-2:395516496764:instance/i-04dc1a79b8277f654"
+    },
+    {
+      "Sid": "AllowSessionDocuments",
+      "Effect": "Allow",
+      "Action": "ssm:StartSession",
+      "Resource": [
+        "arn:aws:ssm:us-east-2:395516496764:document/SSM-SessionManagerRunShell",
+        "arn:aws:ssm:us-east-2::document/SSM-SessionManagerRunShell",
+        "arn:aws:ssm:us-east-2::document/AWS-StartSSHSession"
+      ]
+    },
+    {
+      "Sid": "ManageOwnSessions",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:TerminateSession",
+        "ssm:ResumeSession"
+      ],
+      "Resource": "arn:aws:ssm:us-east-2:395516496764:session/*"
+    },
+    {
+      "Sid": "SessionLogsKmsDecrypt",
+      "Effect": "Allow",
+      "Action": [
+        "kms:Decrypt",
+        "kms:GenerateDataKey"
+      ],
+      "Resource": "arn:aws:kms:us-east-2:395516496764:key/f148edeb-221b-4a78-8367-96f95c1669c6"
+    },
+    {
+      "Sid": "DescribeForConsole",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DescribeInstances",
+        "ssm:DescribeInstanceInformation",
+        "ssm:DescribeSessions",
+        "ssm:GetConnectionStatus"
+      ],
+      "Resource": "*"
+    }
+  ]
+}

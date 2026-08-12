@@ -24,5 +24,29 @@ output "alarm_names" {
     { for k, a in aws_cloudwatch_metric_alarm.blocked_total : "${k}-blocked-total" => a.alarm_name },
     { for k, a in aws_cloudwatch_metric_alarm.rate_limit_blocks : "${k}-rate-limit-blocks" => a.alarm_name },
     { for k, a in aws_cloudwatch_metric_alarm.common_rule_blocks : "${k}-common-ruleset-blocks" => a.alarm_name },
+    { for k, a in aws_cloudwatch_metric_alarm.known_bad_inputs_blocks : "${k}-known-bad-inputs-blocks" => a.alarm_name },
+    { for k, a in aws_cloudwatch_metric_alarm.metric_liveness : "${k}-no-metrics" => a.alarm_name },
   )
+}
+
+output "effective_thresholds" {
+  description = <<-EOT
+    Resolved threshold per Web ACL after per-ACL overrides are applied over the
+    module defaults. Useful for confirming a tfvars override actually took
+    effect rather than silently falling back to the default.
+  EOT
+  value       = local.thresholds
+}
+
+output "metrics_namespace" {
+  description = <<-EOT
+    The CloudWatch namespace these alarms watch. Exposed so a verification
+    step can assert it rather than assume it — the June 2026 delivery shipped
+    "AWS/WAFv2" (lowercase v) against the real "AWS/WAFV2" and every alarm sat
+    in OK for seven weeks watching nothing.
+
+    Verify with:
+      aws cloudwatch list-metrics --namespace AWS/WAFV2 --region <region>
+  EOT
+  value       = "AWS/WAFV2"
 }

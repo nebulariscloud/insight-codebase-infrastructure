@@ -2,9 +2,12 @@
 # WAF logs (Perimeter / us-east-2)
 #
 # Builds the WAF log destination bucket + KMS CMK and turns on logging for
-# the two existing CFN-managed Web ACLs:
-#   - ingress-alb-waf      (custom-stacks/ingress-alb.yaml)
-#   - scriptcase-lb-waf    (custom-stacks/scriptcase-lb.yaml)
+# every Web ACL named in var.web_acl_names. As of 2026-08-10 that is all four
+# perimeter Web ACLs:
+#   - ingress-alb-waf      (custom-stacks/ingress-alb.yaml)      CFN-managed
+#   - scriptcase-lb-waf    (custom-stacks/scriptcase-lb.yaml)    CFN-managed
+#   - crm-alb-waf          (live/perimeter/crm-alb)              Terraform
+#   - osticket-alb-waf     (live/perimeter/osticket-alb)         Terraform
 #
 # Why this leaf can attach logging to LZA-owned Web ACLs without violating
 # the LZA-vs-Terraform ownership boundary:
@@ -14,17 +17,20 @@
 #   Web ACL or its CFN stack; CFN's drift detection won't notice. This is
 #   the same shape we already use for aws_wafv2_web_acl_association in the
 #   alb module - attach to a resource without owning it.
+#
+# The list shape (rather than one variable per Web ACL, which is what this
+# leaf had until 2026-08-10) exists so adding a Web ACL is a one-line tfvars
+# edit. The old fixed-pair shape is why crm-alb-waf and osticket-alb-waf went
+# unlogged from creation until 2026-08-10 - the leaf had no way to express a
+# third or fourth ACL, so nothing failed and nobody noticed.
 ###############################################################################
 
-# Look up the existing Web ACLs by name. ARNs are stable across regenerations
-# of the LZA stack, but the lookup makes that automatic.
-data "aws_wafv2_web_acl" "ingress" {
-  name  = var.ingress_web_acl_name
-  scope = "REGIONAL"
-}
+# Look up each Web ACL by name. ARNs are stable across regenerations of the
+# LZA stack, but the lookup makes that automatic.
+data "aws_wafv2_web_acl" "this" {
+  for_each = toset(var.web_acl_names)
 
-data "aws_wafv2_web_acl" "scriptcase" {
-  name  = var.scriptcase_web_acl_name
+  name  = each.value
   scope = "REGIONAL"
 }
 
@@ -40,9 +46,12 @@ module "waf_logs" {
 
   log_retention_days = var.log_retention_days
 
+  # The module's for_each over this list is keyed by ARN, so the two Web ACLs
+  # that were already logging keep their exact existing state addresses.
+  # Adding names here is therefore a create-only plan - it never replaces or
+  # destroys an existing logging configuration.
   attach_to_web_acl_arns = [
-    data.aws_wafv2_web_acl.ingress.arn,
-    data.aws_wafv2_web_acl.scriptcase.arn,
+    for name in var.web_acl_names : data.aws_wafv2_web_acl.this[name].arn
   ]
 }
 
@@ -67,12 +76,7 @@ output "kms_alias" {
   value       = module.waf_logs.kms_alias
 }
 
-output "ingress_web_acl_arn_logged" {
-  description = "ARN of the IngressALB Web ACL that logging is now attached to."
-  value       = data.aws_wafv2_web_acl.ingress.arn
-}
-
-output "scriptcase_web_acl_arn_logged" {
-  description = "ARN of the Scriptcase Web ACL that logging is now attached to."
-  value       = data.aws_wafv2_web_acl.scriptcase.arn
+output "web_acl_arns_logged" {
+  description = "Map of Web ACL name => ARN that logging is attached to."
+  value       = { for name, acl in data.aws_wafv2_web_acl.this : name => acl.arn }
 }

@@ -240,6 +240,114 @@ Low is reserved for future use (daily summary, capacity-planning alerts) — var
 
 **When to extend:** If two leaves need the same complex pattern, lift it into the module. Don't pre-build for hypothetical patterns.
 
+### D13 — Dead-man's-switch alarm alongside the threshold alarms
+
+**Added 2026-08-06, in response to a real defect.**
+
+**Decision:** every Web ACL gets a `<name>-<key>-no-metrics` alarm on
+`AllowedRequests < 1` with `treat_missing_data = "breaching"`, in addition to
+the three threshold alarms from D9.
+
+**What happened:** the original module set the CloudWatch namespace to
+`AWS/WAFv2`. The real namespace is `AWS/WAFV2` — capital V, and CloudWatch
+namespaces are case-sensitive. Because all three threshold alarms use
+`treat_missing_data = "notBreaching"`, they reported `OK` continuously for
+seven weeks while resolving against a namespace containing no metrics. The
+2026-06-21 verification recorded "all 6 alarms OK" and treated that as proof
+the pipeline worked. It wasn't proof of anything.
+
+**Why the threshold alarms cannot detect this themselves:** `notBreaching` is
+the right setting for a "too many blocks" alarm — no data genuinely is good
+news when you are counting bad events. But that same property makes a
+misconfigured alarm indistinguishable from a healthy one. The failure mode is
+silent by construction.
+
+**Alternatives considered:**
+
+- *Switch the threshold alarms to `treat_missing_data = "missing"`.* Would
+  surface the problem as `INSUFFICIENT_DATA`, but conflates "metric pipeline
+  broken" with "quiet period", and `INSUFFICIENT_DATA` is widely ignored in
+  practice precisely because it is usually benign.
+- *Switch to `breaching` on the threshold alarms.* Would page on every quiet
+  overnight window. Unusable.
+- *Rely on the dashboard.* A blank dashboard is only noticed by someone who
+  opens it. Nobody opened it for seven weeks, which is exactly the point.
+- *A synthetic canary hitting each endpoint.* Solves a broader problem
+  (end-to-end reachability) at meaningfully more cost and complexity. Worth
+  considering separately; overkill as a fix for a namespace typo.
+
+**Why an inverted alarm:** it converts "this alarm is watching nothing" from a
+silent pass into a firing condition, using the same metric plumbing the real
+alarms depend on. If the namespace, dimensions, or Web ACL association break,
+`AllowedRequests` stops resolving and the alarm fires on missing data. It is a
+one-resource test of the whole path.
+
+**Trade-off:** false positives on genuinely idle endpoints. Mitigated by
+`liveness_evaluation_periods` (default 12 periods = 1 hour of silence) and an
+`enable_liveness_alarm` per-stack off switch for workloads with legitimate
+zero-traffic windows.
+
+**Process change this implies:** verification must assert on datapoints, not on
+alarm state. `waf-verification-record.md` V3-R encodes this — it checks that the
+namespace is non-empty, that emitted dimension names match the alarm
+definitions, and that each Web ACL has a real datapoint, before drawing any
+conclusion from a green alarm.
+
+### D14 — Enrolment lists in leaves are lists, never a fixed set of variables
+
+**Decision.** Any leaf whose job is to enrol a set of resources takes a **list**
+input, never one variable per member. `terraform/live/perimeter/waf-logs` takes
+`web_acl_names = [...]`, not `ingress_web_acl_name` + `scriptcase_web_acl_name`.
+
+**Why this is a decision and not just style.** The fixed-pair shape caused a real
+delivery defect. When `crm-alb` and `osticket-alb` were built in July and given
+Web ACLs, the `waf-logs` leaf had no way to express a third or fourth member.
+So it did not enrol them, and — this is the important part — **nothing failed.**
+The leaf planned clean and applied clean for three weeks while two of the four
+protected resources delivered zero log records. Found 2026-08-10 by V9 in
+`waf-verification-record.md`.
+
+A fixed-arity input encodes a cardinality assumption into the schema. When
+reality outgrows it, Terraform has nothing to complain about: the config is
+internally consistent and simply describes less than exists. There is no error to
+notice.
+
+**This is the same class of failure as D13.** D13 was an alarm watching a
+namespace with no metrics, reporting `OK`. D14 is a leaf enrolling a subset,
+reporting success. Both are silent-and-green. The two mitigations differ:
+
+- D13's answer was a **liveness alarm** — make the absence detectable at runtime.
+- D14's answer is a **coverage cross-check** — enumerate from AWS, compare against
+  the Terraform input. `waf-finish-checklist.md` step 6 does exactly that for
+  logging, and step 1 for Web ACL attachment.
+
+Where a liveness signal is available, prefer it; it works without anyone
+remembering to run a check. For enrolment, no such signal exists — an unenrolled
+resource emits nothing by definition — so the cross-check is the only option, and
+it has to be written into the checklist rather than left to intent.
+
+**Alternatives considered.**
+
+- **A data source that discovers all Web ACLs and enrols every one.** Rejected.
+  No `aws_wafv2_web_acls` plural data source exists, and even with one, implicit
+  enrolment means a Web ACL created for an experiment silently starts billing
+  log storage. Explicit lists keep the enrolled set reviewable in a diff.
+- **A validation rule asserting the list length matches the live Web ACL count.**
+  Rejected. Terraform variable validation cannot read AWS. A `precondition`
+  against a data source could, but it would fail the plan on the *next* leaf's
+  PR rather than the one that created the Web ACL — noise at the wrong time.
+
+**Consequence to hold to.** A PR that creates a Web ACL adds its name to
+`web_acl_names` in the same PR. The `waf-logs` leaf README states this, and the
+finish checklist verifies it after the fact.
+
+**Keying note.** The `waf-logs` module's `for_each` over
+`attach_to_web_acl_arns` is keyed by **ARN**, not by list index. This is what
+makes the list safe to extend: appending a name is a create-only plan, and
+existing logging configurations keep their state addresses. A `count`-based
+implementation would have shifted indices and forced replacements. Any future
+enrolment list should key on a stable identity for the same reason.
+
 ## What this leaves on the table
 
 Honest list of things the design doesn't cover, and why:
@@ -257,3 +365,5 @@ Honest list of things the design doesn't cover, and why:
 | Date | Change | PR |
 |---|---|---|
 | 2026-06-21 | Initial design record. WAF SOW implementation merged. | feat/waf-sow-implementation |
+| 2026-08-06 | Added D13 (dead-man's-switch alarm) after finding the `AWS/WAFv2` → `AWS/WAFV2` namespace typo had silently disabled all alarms since delivery. | fix/waf-monitoring-namespace |
+| 2026-08-10 | Added D14 (enrolment lists, not fixed variable sets) after finding `crm-alb-waf` and `osticket-alb-waf` had never delivered a WAF log record — the `waf-logs` leaf had no way to express a third Web ACL. Same silent-and-green class as D13. | #69 |
