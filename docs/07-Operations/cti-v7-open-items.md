@@ -53,14 +53,36 @@ accumulating a few. **All edits are already made in `aws-accelerator-config/`.**
 
 | # | Item | File | Status |
 |---|---|---|---|
-| C1 | **Add `kms:CreateGrant`** to the TerraformExecution allow-policy | `iam-policies/terraform-execution-allow-policy.json` | ☐ not yet edited |
+| C1 | **Add `kms:CreateGrant`** to the TerraformExecution allow-policy | `iam-policies/terraform-execution-allow-policy.json` | ✅ edited 2026-08-12, awaiting push |
 | C2 | **Durable SCP fix** — scope `GRNETSEC2EIPAssociate` deny to `arn:aws:ec2:*:*:elastic-ip/*` so an untagged ENI no longer trips it | `service-control-policies/lza-core-workloads-guardrails-1.json` | ✅ edited, awaiting push |
+| C3 | **Add `ec2:ModifyInstanceMetadataOptions`** — without it, IMDSv2 cannot be toggled on an existing instance | `iam-policies/terraform-execution-allow-policy.json` | ✅ edited 2026-08-12, awaiting push |
+| C4 | **Add `ec2:MonitorInstances` + `ec2:UnmonitorInstances`** — the original gap, worked around with `monitoring = false` on every leaf | `iam-policies/terraform-execution-allow-policy.json` | ✅ edited 2026-08-12, awaiting push |
+
+**Policy size check after the C1/C3/C4 edits:** 4,298 characters excluding whitespace
+against the 6,144 managed-policy limit, so 1,846 to spare. Worth re-checking on any
+future addition — AWS excludes whitespace, so the raw file size (6,121 bytes) is
+misleading and looks far closer to the limit than it is.
 
 **Why C1 matters:** RDS needs `kms:CreateGrant` to use a customer CMK. The allow-policy
 is an explicit allow-list and omits it, which is what caused the
 `KMSKeyNotAccessibleFault` failures. The `iccmaindb` leaf works around it with an
 explicit key policy on its own CMK, so nothing is broken — but **any future leaf
 using a customer CMK will hit the same wall** until C1 lands.
+
+**Why C3 matters:** it is currently impossible to change IMDSv2 enforcement on an
+*existing* instance. `imdsv2_required` in `production/ws-aheeva` is parked at `false`
+purely because of this — declaring `true` made the apply fail with
+`UnauthorizedOperation ... ec2:ModifyInstanceMetadataOptions`, and a permanently red
+leaf masks real failures. Note metadata options **can** be set at launch, since
+`ec2:RunInstances` is allowed, so a replacement fixes it without C3. That is the plan
+for `ws-aheeva`, but any leaf needing to harden a *running* instance is stuck.
+
+**The pattern behind C1/C3/C4:** the allow-policy is an explicit allow-list, so every
+gap surfaces as `UnauthorizedOperation` at apply time on something that looks obvious.
+Three have been hit so far. When a plan fails this way, check the allow-policy before
+suspecting an SCP — the message distinguishes them clearly: *"no identity-based policy
+allows"* is an IAM gap, whereas an SCP says *"explicit deny in a service control
+policy"*.
 
 **Why C2 matters:** without it, every future CTI v7 instance replacement will fail to
 re-associate its EIP (the workaround was manually tagging the ENI `Migrated=CTIv7`).
