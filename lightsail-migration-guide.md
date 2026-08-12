@@ -6,6 +6,53 @@ This guide mirrors the structure of `scriptcase-migration-guide.md` and reuses `
 
 ---
 
+## ⚠️ Do this on the SOURCE before you image anything
+
+**Install and start the SSM Agent on the source box first.** This has now cost real time on
+four separate servers in this programme — CTI v7, `webapps`, osTicket and WS Aheeva all
+arrived in the destination with no working agent, because the source images never had one.
+
+The destination leaf attaching an instance profile is not enough. The profile grants
+permission; the *agent* is what connects. No agent in the image, no Session Manager, no
+matter how correct the IAM and networking are.
+
+It matters most on **Windows**, where it can be unrecoverable rather than merely annoying:
+
+- On Linux there is an SSH fallback, and `user_data` reliably runs via cloud-init, so an
+  agent can be installed after the fact.
+- On Windows there is no SSH, and `user_data` **does not reliably run on a lift-and-shift
+  image** — EC2Launch treats it as already consumed on an image that was never Sysprepped.
+  WS Aheeva proved this: a `user_data` installer was attached and never executed.
+- And on a lift-and-shift Windows image `get-password-data` produces nothing, because no
+  password is generated without Sysprep. So the *only* way in is the credentials already
+  inside the image.
+
+Net effect: a Windows box can boot perfectly — 2/2 status checks, clean lock screen — and be
+completely inaccessible.
+
+```powershell
+# On the SOURCE Windows box, before create-image. Silent, no reboot, no service impact.
+Start-Process -FilePath .\AmazonSSMAgentSetup.exe -ArgumentList '/quiet','/norestart' -Wait
+Get-Service AmazonSSMAgent | Select-Object Name, Status, StartType
+```
+Installer: `https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/windows_amd64/AmazonSSMAgentSetup.exe`
+
+```bash
+# On a SOURCE Linux box
+sudo dnf install -y amazon-ssm-agent || sudo snap install amazon-ssm-agent --classic
+sudo systemctl enable --now amazon-ssm-agent
+```
+
+Two side benefits: a current agent supports IMDSv2, so `imdsv2_required = true` can stay;
+and if the client's admin runs it, **no credentials have to change hands** — which is a
+much easier ask than a Windows Administrator password.
+
+**Recovery if you have already imaged without it.** On Windows, attach a key pair to the
+instance (this forces a replacement, so do it while the box is still disposable) and use the
+`AWSSupport-ResetAccess` automation, which works on an instance that is *not* SSM-managed
+and encrypts the new password to that key pair. Without a key pair attached, that route is
+closed too.
+
 ## Server Inventory
 
 | # | Source name | RAM | vCPU | Disk | Source public IP | Source IPv6 | Target type | Target subnet | Migration order |
