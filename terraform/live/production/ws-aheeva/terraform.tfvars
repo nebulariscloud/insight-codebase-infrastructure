@@ -58,23 +58,44 @@ ami_id = "ami-0afa2a16db667ea10"
 # configuration work, the same change would be genuinely expensive.
 key_name = "ws-aheeva-admin"
 
-# imdsv2_required is left at its default of TRUE.
+# ⚠️ Held at false NOT by choice — the revert to true is blocked by a missing IAM
+# action, and leaving it declared true made every apply of this leaf fail.
 #
-# It was temporarily set false in PR #74 to test whether an SSM agent too old to
-# fetch an IMDSv2 token was the reason this box would not register. **That test came
-# back negative.** The replacement instance (i-00489e263e7eaf005) came up with
-# http_tokens = optional, 2/2 status checks, a clean Windows lock screen, the correct
-# instance profile, in a subnet where SSM demonstrably works — and still did not
-# register. So IMDSv2 was never the blocker: the agent is simply not present, and the
-# user_data that would have installed it did not execute, which is the expected
-# behaviour on an image that was never Sysprepped (EC2Launch treats user data as
-# already consumed).
+# Background: PR #74 set this false to test whether an SSM agent too old to fetch an
+# IMDSv2 token was why the box would not register. That test came back NEGATIVE — the
+# replacement instance came up with http_tokens = optional, 2/2 status checks, a clean
+# Windows lock screen, the correct instance profile, in a subnet where SSM demonstrably
+# works, and still did not register. The agent is simply absent, and the user_data that
+# would have installed it never ran (EC2Launch skips user data on an image that was
+# never Sysprepped).
 #
-# Keeping IMDSv1 reachable therefore buys nothing, and IMDSv1 without a token is what
-# makes SSRF-to-credential-theft possible. Reverted.
+# So PR #75 set it back to true — and the apply failed:
 #
-# The real fix is on the SOURCE box — see docs/07-Operations/ws-aheeva-migration-plan.md
-# Phase 2a. A current agent supports IMDSv2, so this stays true.
+#   UnauthorizedOperation: ... assumed-role/TerraformExecution/tf-Production-ws-aheeva
+#   is not authorized to perform: ec2:ModifyInstanceMetadataOptions ... because no
+#   identity-based policy allows the ec2:ModifyInstanceMetadataOptions action
+#
+# "no identity-based policy allows" = a gap in the TerraformExecution allow-policy,
+# which is an explicit allow-list. Not an SCP deny. Leaving the leaf declaring `true`
+# would have meant a permanently red apply on every future change to this leaf, which
+# masks real failures — so it is parked at false deliberately.
+#
+# HOW IT GETS BACK TO TRUE — either path, no ModifyInstanceMetadataOptions needed:
+#
+#   1. On the next instance replacement (which is coming anyway, with the AMI rebuilt
+#      after the SSM agent is installed on the source box — see
+#      docs/07-Operations/ws-aheeva-migration-plan.md Phase 2a). Metadata options are
+#      settable at LAUNCH via RunInstances, which IS in the allow-policy. Proof: the
+#      original instance was created with http_tokens = required and that apply
+#      succeeded. **Flip this to true in the same PR that updates ami_id.**
+#
+#   2. Or once the allow-policy gains ec2:ModifyInstanceMetadataOptions via the next
+#      LZA pipeline run — the edit is already staged in
+#      aws-accelerator-config/iam-policies/terraform-execution-allow-policy.json.
+#
+# Until then: IMDSv1 is reachable on this box. Mitigated by it being private, having no
+# public IP, and holding nothing — but it is a known open item, not a settled state.
+imdsv2_required = false
 
 vpc_id    = "vpc-04a8720d0ddb40713"
 subnet_id = "subnet-00d31cac6422417c4" # shared-prod-app-a
