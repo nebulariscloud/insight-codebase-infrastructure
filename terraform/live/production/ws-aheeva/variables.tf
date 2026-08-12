@@ -112,6 +112,26 @@ variable "ftps_passive_to" {
   default     = 40500
 }
 
+variable "imdsv2_required" {
+  description = <<-EOT
+    Require IMDSv2 (sets http_tokens = "required").
+
+    Should be true. It is exposed as a variable only because SSM agent versions
+    older than roughly 2.3.68 cannot fetch an IMDSv2 token, so they never read
+    instance identity and never register — which presents as an instance that is
+    running and perfectly healthy but simply absent from Systems Manager. On a
+    lift-and-shift of an old Windows box that is a real possibility, and setting
+    this false is the cheapest way to confirm or eliminate it.
+
+    Leaving it false is a genuine security regression: IMDSv1 is reachable without
+    a token, which is what makes SSRF-to-credential-theft possible. Mitigated only
+    by this box being private with no public IP. Revert to true as soon as the
+    in-box agent is confirmed working and upgraded.
+  EOT
+  type        = bool
+  default     = true
+}
+
 # NOTE: there is deliberately no `ftps_client_cidrs` variable here.
 #
 # It used to exist, was never referenced by main.tf, and was actively misleading:
