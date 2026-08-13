@@ -752,9 +752,53 @@ The SOW logging deliverable now covers every protected resource.
 
 ## V10 — Terraform state inventory for orphans and duplicates
 
-**Status: FAILED on state hygiene. Security question CLOSED — no stray load
-balancer exists. Resolved to scenario (c): the ALB was destroyed, but the destroy
-was PARTIAL and left `icc-alb-sg` (`sg-076c916a807936cee`) behind, unmanaged.**
+**Status: FAILED, then REMEDIATED — PASSED 2026-08-10.**
+
+Scenario (c): the ALB was already destroyed, but the destroy was partial and left
+`icc-alb-sg` (`sg-076c916a807936cee`) behind, unmanaged. Both the security group
+and the stale state object have now been removed.
+
+```
+$ aws ec2 delete-security-group --group-id sg-076c916a807936cee --region us-east-2
+{"Return": true, "GroupId": "sg-076c916a807936cee"}
+
+$ aws s3 cp s3://lza-terraform-state-547368325532/live/perimeter/icc-alb/terraform.tfstate \
+    ./icc-alb-orphan-state-backup.json
+download: ... to ./icc-alb-orphan-state-backup.json
+
+$ aws s3 rm s3://lza-terraform-state-547368325532/live/perimeter/icc-alb/terraform.tfstate
+delete: s3://.../live/perimeter/icc-alb/terraform.tfstate
+
+$ aws dynamodb delete-item --table-name lza-terraform-locks \
+    --key '{"LockID":{"S":".../live/perimeter/icc-alb/terraform.tfstate-md5"}}'
+(no output)
+```
+
+`Return: true` rather than `DependencyViolation` is the authoritative confirmation
+that nothing referenced the security group.
+
+**Certificate inventory afterwards — four, all accounted for:**
+
+```
+wazuh.insightgrouppr.com      ISSUED               InUse=True
+sc.insightgrouppr.com         ISSUED               InUse=True
+crm.insightgrouppr.com        ISSUED               InUse=True
+osticket.insightgrouppr.com   PENDING_VALIDATION   InUse=False
+```
+
+No `icc-alb` leftover. `crm.insightgrouppr.com` is managed by the live `crm-alb`
+leaf, which creates `aws_acm_certificate.icc` under that same resource name — the
+leaf was built from `icc-alb`. Nothing was left unmanaged by removing the old
+state object.
+
+**Method note.** The `describe-security-groups` reference query used here searches a
+single account. Security groups can be referenced across accounts over a peered VPC
+or a same-region Transit Gateway with referencing enabled, so that query can be
+incomplete. It did not matter in this estate — the `alb` module writes CIDR-only
+rules and the only SG-to-SG references in `terraform/` are to
+`var.eice_security_group_id` in Production — but the general lesson is to **attempt
+the delete and let AWS answer**, because `delete-security-group` is non-destructive
+on failure. A check that cannot be incomplete beats a query that can.
 
 The concern this raised was whether a second internet-facing load balancer was
 running outside the WAF programme. An account-wide `describe-load-balancers` on
@@ -966,21 +1010,36 @@ target means it fails open, silently.
 **Not a WAF defect.** The Web ACL inspects and logs that traffic correctly, as V5,
 V7 and V9 confirm. Recorded here because it was found during WAF verification.
 
-**Whether it is a live outage is the one open question**, and it turns on what
-`osticket.insightgrouppr.com` resolves to. If the ALB, the help desk is down now.
-If the pre-migration Lightsail host, it is not an outage — but the migration has
-not cut over and `osticket-alb-waf` is not yet in front of real user traffic.
+**Not a live outage — confirmed 2026-08-10.** `osticket.insightgrouppr.com` has not
+been pointed at this ALB, and the validation CNAME is deliberately held until the
+cutover window rather than overlooked. The help desk is still on the pre-migration
+host, so both faults are **latent**.
 
-**This moves the validation CNAME onto the critical path.** No certificate means no
-443 listener, and no 443 listener means the redirect cannot land. One CNAME at
-Network Solutions (`ns47.worldnic.com` / `ns48.worldnic.com`) using the Name and
-Value above; then `enable_https = true` on the `osticket-alb` leaf, which both adds
-the 443 listener and converts the port-80 listener to a redirect.
+Two consequences that still hold:
 
-Health-check fix and stopgaps: `waf-finish-checklist.md` step 8d. The fix is a
-static file the web server answers for any `Host`, **not** widening the matcher to
-accept 500 — that would reproduce the rev 2 mistake of a monitor unable to report
-failure.
+1. **`osticket-alb-waf` is not yet in front of real user traffic.** It is deployed,
+   attached, logging and alarming, and acceptance criterion 1 is satisfied on the
+   ALB — but until DNS moves it inspects test traffic. Recorded so "all four
+   protected" is not read as "the osTicket application is protected today".
+2. **Both faults must close before cutover, not after.** Move DNS with either in
+   place and the help desk breaks at the worst moment: browsers follow the redirect
+   to a closed port, and the ALB has no health signal exactly when one is wanted.
+
+**Cutover ordering** — all reversible, none touching the live help desk, so do them
+ahead of the window rather than inside it:
+
+1. Validation CNAME at Network Solutions (`ns47.worldnic.com` / `ns48.worldnic.com`)
+   using the Name and Value above → cert `ISSUED`.
+2. `enable_https = true` on the `osticket-alb` leaf → adds the 443 listener and
+   converts the port-80 listener to a redirect. This is what gives osTicket's own
+   redirect somewhere to land.
+3. Health check pointed at a static file the web server answers for any `Host`,
+   bypassing PHP — **not** widening the matcher to accept 500, which would
+   reproduce the rev 2 mistake of a monitor unable to report failure.
+4. Then move DNS.
+
+Detail in `waf-finish-checklist.md` step 8d. Belongs on the osTicket migration
+checklist rather than carried as an open WAF item.
 
 ## Verification summary
 
@@ -996,8 +1055,8 @@ failure.
 | V7 — All four Web ACLs return metric datapoints | **Pass (2026-08-10)** — 36 / 19 / 3 / 5 |
 | V8 — Alarm inventory (20 expected) and thresholds | **Pass (2026-08-10)** — 20 confirmed. First recorded as NOT VERIFIED on a stale six-alarm capture; re-run settled it |
 | V9 — Log records actually landing in S3, per Web ACL | **FAIL, then PASS (2026-08-10)** — was 28812/15492/**0**/**0**; PR #69 merged and applied; now 28830/15502/**1**/**4**. All four Web ACLs delivering |
-| V10 — State backend free of orphans / duplicates | **FAIL on hygiene; security question CLOSED (2026-08-10)** — resolved to scenario (c): state ALB is `icc-alb-396237492...`, not `crm-alb-142110994...`, and no `icc-alb` exists. Destroy was partial — `sg-076c916a807936cee` survives unmanaged. Cleanup outstanding |
-| V11 — HTTPS on every public endpoint | **FAIL (2026-08-10), worse than first assessed** — osTicket 301s to `https://` and the ALB has no 443 listener, so the portal is unusable through it. Target group also unhealthy behind a fail-open ALB. ACM cert `PENDING_VALIDATION` is now on the critical path |
+| V10 — State backend free of orphans / duplicates | **FAIL, then PASS (2026-08-10)** — scenario (c): state ALB was `icc-alb-396237492...`, not `crm-alb-142110994...`, and no `icc-alb` existed. Partial destroy had left `sg-076c916a807936cee`; security group deleted, state object and lock digest removed, backup taken. Cert inventory clean |
+| V11 — HTTPS on every public endpoint | **FAIL — latent, not live (2026-08-10)** — osTicket 301s to `https://` and the ALB has no 443 listener; target group also unhealthy behind a fail-open ALB. **Not user-facing:** DNS still points at the pre-migration host and the validation CNAME is deliberately held for the cutover window. Cutover prerequisite for the osTicket migration |
 
 Round 3 changed the method, not just the coverage. V1–V4 asked "does the thing
 the configuration names exist?" V5, V9 and V10 enumerate from AWS first and

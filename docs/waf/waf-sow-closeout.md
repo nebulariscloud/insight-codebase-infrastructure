@@ -38,12 +38,12 @@ All three were chased the same day. Outcomes:
 | Finding | Outcome |
 |---|---|
 | 1 — two Web ACLs never logging | **Fixed and fully verified.** PR #69 merged and applied; plan was `2 to add, 0 to change, 0 to destroy` as predicted. All four Web ACLs now delivering log records: 28830 / 15502 / 1 / 4. |
-| 2 — orphaned `icc-alb` state | **Security question closed. No stray load balancer exists.** Account-wide enumeration returned seven load balancers: three network (WAF does not apply to NLBs) and four application, every one with a Web ACL. No `icc-alb`. Resolved to a destroyed ALB — the state's DNS name `icc-alb-396237492...` differs from the live `crm-alb-142110994...`, so `crm-alb` was rebuilt rather than renamed. The destroy was **partial**: `icc-alb-sg` (`sg-076c916a807936cee`) survives unmanaged. No cost, no exposure; cleanup outstanding. |
+| 2 — orphaned `icc-alb` state | **Closed.** Account-wide enumeration returned seven load balancers: three network (WAF does not apply to NLBs) and four application, every one with a Web ACL. No `icc-alb`. Resolved to a destroyed load balancer — the state's DNS name `icc-alb-396237492...` differs from the live `crm-alb-142110994...`, so `crm-alb` was rebuilt rather than renamed. The destroy had been partial, leaving `icc-alb-sg` (`sg-076c916a807936cee`) unmanaged; that security group and the stale state object were both removed on 2026-08-10, with a backup of the state taken first. Certificate inventory afterwards clean — four certificates, all accounted for. |
 | 3 — alarm inventory unconfirmed | **Confirmed: 20 alarms.** The six-alarm capture predated PR #62's apply; it was a stale reading, not a failed apply. |
 
 **Net effect on this closeout.** Acceptance criterion 1 loses its qualification — the load balancer inventory is now known complete, so "all four ALBs protected" is unconditional rather than a statement about the ALBs we knew of. The logging deliverable goes from 2-of-4 to **4-of-4 configured and confirmed delivering**. Monitoring is fully verified.
 
-**All three rev 3 findings are closed.** What remains on the Nebularis side is two verification steps that were never failures — opening the dashboard, and exercising the runbook — plus removal of a stale state object.
+**All three rev 3 findings are closed, and the state cleanup with them.** What remains on the Nebularis side is two verification steps that were never failures: opening the dashboard, and exercising the runbook.
 
 **One finding outside SOW scope, recorded because it surfaced during this work and matters more than anything left inside scope.**
 
@@ -52,13 +52,19 @@ The forced request that closed the logging check returned HTTP **500** from osTi
 1. **The osTicket target group has been unhealthy the entire time** (`Target.ResponseCodeMismatch`), and the load balancer has been serving traffic anyway. ALB health checks address the target by IP, ELBv2 offers no way to set the hostname they send, and osTicket answers an unrecognised host with 500 — outside the configured `200,301,302` matcher. Traffic still flowed because when every target in a group is unhealthy the ALB routes to all of them regardless. One target, so it failed open, silently.
 2. **osTicket redirects to `https://osticket.insightgrouppr.com/`, and the load balancer has no HTTPS listener** — `enable_https = false`, so no certificate, so no port-443 listener. Every browser following that redirect reaches a closed port. **The portal is unusable through this load balancer.**
 
-**Whether it is a live outage depends on one DNS lookup**, still outstanding. If `osticket.insightgrouppr.com` resolves to the load balancer, the help desk is down now. If it still resolves to the pre-migration Lightsail host, it is not an outage — but the migration has not cut over, and `osticket-alb-waf` is therefore not yet in front of real user traffic.
+**Not a live outage.** `osticket.insightgrouppr.com` has not been pointed at this load balancer, and the certificate validation record is deliberately being held until the cutover window. The help desk is still served by the pre-migration host, so both faults are latent.
 
-**This is not a WAF defect.** The Web ACL inspects and logs that traffic correctly, which acceptance criterion 1 and the logging verification both confirm. But it changes the priority of one item this document previously listed as an operational follow-up: **the ACM validation CNAME is now on the critical path.** No certificate means no HTTPS listener, and no HTTPS listener means the redirect cannot land. That record can only be created by Insight Group's DNS administrator.
+**This is not a WAF defect.** The Web ACL inspects and logs that traffic correctly, which acceptance criterion 1 and the logging verification both confirm.
 
-Full write-up, including stopgaps if the portal must work before the certificate lands, at step 8d of `waf-finish-checklist.md`. The health-check fix is a static file the web server answers for any hostname — deliberately **not** widening the accepted status codes to include 500, which would make the check pass while osTicket was genuinely broken and repeat the rev 2 mistake of a monitor that cannot report failure.
+Two consequences that do bear on this document:
 
-Belongs to the osTicket migration workstream rather than this SOW.
+**1. `osticket-alb-waf` is not yet in front of real user traffic.** It is deployed, attached, logging and alarming, and acceptance criterion 1 is met on the load balancer. But until DNS moves, what it inspects is test traffic. Stated plainly so that "all four applications protected" is not read as "the osTicket application is protected today" — the load balancer is ready; the traffic has not arrived. The same is true in a narrower sense of any application whose DNS has not yet moved.
+
+**2. Both faults must close before the cutover.** Move DNS with either still in place and the help desk breaks at the worst possible moment. The ordering — validation CNAME, then `enable_https = true`, then the health-check fix, then DNS — is written up at step 8d of `waf-finish-checklist.md`. All three preparatory steps are reversible and none touch the currently-live help desk, so they belong ahead of the cutover window rather than inside it.
+
+The health-check fix is a static file the web server answers for any hostname — deliberately **not** widening the accepted status codes to include 500, which would make the check pass while osTicket was genuinely broken and repeat the rev 2 mistake of a monitor that cannot report failure.
+
+**Belongs to the osTicket migration workstream, not this SOW.** Recorded here because it was found during WAF verification and because it changes how acceptance criterion 1 should be read for that one application.
 
 **No open security exposure remains in the WAF layer.** The one live exposure on the list is unrelated to WAF: the osTicket portal is served over plain HTTP, blocked on a DNS record only Insight Group can create.
 
@@ -350,8 +356,8 @@ Copy-paste commands for each of these are in `waf-finish-checklist.md`.
 - [x] **Log delivery verified on all four Web ACLs** — 28830 / 15502 / 1 / 4. **The logging deliverable is closed.**
 - [ ] **Dashboard opened and confirmed populating** (last unverified step on acceptance criterion 4)
 - [ ] **Runbook tested** — block/unblock exercise, outcome recorded in `waf-runbook.md`
-- [ ] **Orphaned `icc-alb` state object removed** — state hygiene only, no longer gating. Checklist step 7.
-- [ ] **osTicket portal fixed** — not a WAF item, but the most serious thing found during this work. Target group unhealthy behind a fail-open load balancer, and a redirect to an HTTPS listener that does not exist. Checklist step 8d. **Blocked in part on the client-side validation CNAME.**
+- [x] **Orphaned `icc-alb` security group and state object removed** — completed 2026-08-10. `delete-security-group` returned success rather than `DependencyViolation`, confirming nothing referenced it.
+- [ ] **osTicket cutover prerequisites** — not a WAF item and not currently user-facing. Target group unhealthy behind a fail-open load balancer, and a redirect to an HTTPS listener that does not exist. Both must close before DNS moves. Checklist step 8d; tracked on the osTicket migration checklist.
 
 **Requires Insight Group:**
 
@@ -391,7 +397,9 @@ We said at rev 3 that we would not invoice against a completion claim while a lo
 - **Monitoring verified** at 20 alarms on the corrected namespace.
 - **The state-file finding confirmed not to involve a live unprotected endpoint**, and the load balancer inventory is now known complete.
 
-**Remaining before we consider the completion claim sound:** a look at the dashboard and the runbook exercise. Both Nebularis-side, both short, and neither is a known failure.
+**Remaining before we consider the completion claim sound:** a look at the dashboard and the runbook exercise. Both Nebularis-side, both short, and neither is a known failure. The state-hygiene cleanup that was on this list is done.
+
+The osTicket faults described above are **not** held against this SOW. They are cutover prerequisites for a separate migration, they are not WAF defects, and they are not currently affecting anyone.
 
 Proposal unchanged in shape:
 

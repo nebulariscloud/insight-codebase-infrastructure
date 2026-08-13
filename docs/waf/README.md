@@ -51,24 +51,23 @@ Supporting material for the remaining items:
 
 - **WAF logging on all four Web ACLs, confirmed delivering** — 28830 / 15502 / 1 / 4. **PR #69** merged and applied.
 - **Alarm inventory confirmed at 20.** The earlier six-alarm reading was stale.
-- **Account-wide load balancer enumeration: 4 ALBs, all with a Web ACL, no `icc-alb`.** The orphaned state file does not correspond to a live unprotected endpoint, and the ALB inventory is now known complete.
+- **Account-wide load balancer enumeration: 4 ALBs, all with a Web ACL, no `icc-alb`.** The orphaned state file did not correspond to a live unprotected endpoint, and the ALB inventory is now known complete.
+- **Orphaned `icc-alb` security group and state object removed.** `sg-076c916a807936cee` deleted, state object and lock digest cleared, backup taken. Certificate inventory clean.
 
 **Nebularis to close — engineering, no client input, and no additional charge:**
 
 1. **Dashboard visual confirmation** — checklist step 1. Last unverified item on SOW acceptance criterion 4.
 2. **Runbook exercise** — ~30 minutes, checklist step 2.
-3. **Remove the orphaned `icc-alb` security group and state object** — resolved to a destroyed ALB with a partial destroy; `sg-076c916a807936cee` survives unmanaged. Hygiene, not exposure. Checklist step 7.
+**Outside the WAF SOW — osTicket cutover prerequisites, not currently user-facing:**
 
-**Outside the WAF SOW, but the most serious thing on this page:**
-
-4. **The osTicket portal is unusable through its load balancer.** Not a WAF defect — the Web ACL inspects and logs that traffic correctly. But the target group has been unhealthy the whole time behind a load balancer that was failing open, and osTicket redirects to an HTTPS listener that does not exist. Whether it is a live outage turns on one DNS lookup. **This puts the ACM validation CNAME on the critical path.** Checklist step 8d.
+3. **The osTicket portal would be unusable through its load balancer if DNS were moved today.** Not a WAF defect — the Web ACL inspects and logs that traffic correctly. But the target group is unhealthy behind a load balancer that fails open, and osTicket redirects to an HTTPS listener that does not exist. Nobody is affected: DNS still points at the pre-migration host. **Both must close before cutover.** Checklist step 8d; belongs on the osTicket migration checklist.
 
 **Requires Insight Group:**
 
 4. **Bot Control** — decision: deploy or waive in writing
 5. **Custom rules** — four short owner conversations, then rules or a recorded finding
 6. **Two training sessions** — scripts are `waf-runbook.md` and `waf-tuning-guide.md`
-7. **osTicket DNS validation CNAME** — **now on the critical path, not cosmetic.** Without the certificate there is no HTTPS listener, and without the listener osTicket's redirect has nowhere to land. One CNAME at Network Solutions; values are in `waf-sow-closeout.md`. See item 4 above.
+7. **osTicket DNS validation CNAME** — deliberately held until the cutover window, which is a reasonable call. When it happens it must come *before* DNS moves, not after. One CNAME at Network Solutions; values are in `waf-sow-closeout.md`. See item 3 above.
 
 The items closed above were found by a wider verification round on 2026-08-10, after the June closeout had already reported those areas as complete. The findings, why they went unnoticed, and how they resolved are written up in `waf-verification-report.md`; status and the payment position are in `waf-sow-closeout.md`.
 
