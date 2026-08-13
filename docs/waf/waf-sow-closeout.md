@@ -43,7 +43,7 @@ All three were chased the same day. Outcomes:
 
 **Net effect on this closeout.** Acceptance criterion 1 loses its qualification — the load balancer inventory is now known complete, so "all four ALBs protected" is unconditional rather than a statement about the ALBs we knew of. The logging deliverable goes from 2-of-4 to **4-of-4 configured and confirmed delivering**. Monitoring is fully verified.
 
-**All three rev 3 findings are closed, and the state cleanup with them.** What remains on the Nebularis side is two verification steps that were never failures: opening the dashboard, and exercising the runbook.
+**All three rev 3 findings are closed, and the state cleanup with them.** What remains on the Nebularis side is a single item that was never a failure: exercising the incident response runbook.
 
 **One finding outside SOW scope, recorded because it surfaced during this work and matters more than anything left inside scope.**
 
@@ -199,9 +199,17 @@ The first draft of this revision qualified the result as "all four *known* ALBs"
 
 ### 4. Monitoring dashboard showing real-time traffic and blocks
 
-**Met, pending visual confirmation.** Dashboard `perimeter-waf` exists with one row per Web ACL plus a rollup. It rendered empty until the namespace fix on 2026-08-10; the metrics it queries are now confirmed present (500,210 metrics in `AWS/WAFV2`, with real datapoints on the exact dimension set the widgets use).
+**Fully met.** Verified 2026-08-10 on three counts, in Perimeter `713939170920` / us-east-2:
 
-**A human should open it once and confirm the widgets populate.** That is the last unverified step on this criterion.
+| Check | Result |
+|---|---|
+| Dashboard `perimeter-waf` exists, post-dating the namespace fix | `LastModified 2026-08-10T18:11:59` |
+| Widget definitions query the corrected namespace | Body references only `AWS/WAFV2` |
+| Widgets visibly render data | **Confirmed in the console** — populated, graphs showing traffic |
+
+One row of widgets per Web ACL plus a rollup row. It rendered empty from June until the namespace fix; the metrics behind it are confirmed present (500,210 metrics in `AWS/WAFV2`, real datapoints on the exact dimension set the widgets query), and a person has now confirmed it displays them.
+
+**This was the last unverified item on this criterion.** It needed a human rather than a command, because a dashboard can exist, hold correct definitions and sit in front of live metrics while still rendering nothing useful — and "it exists" was exactly the inference that made the June verification wrong.
 
 Alarming is fully operational — 20 alarms across 4 Web ACLs (blocked-total, common-ruleset, known-bad-inputs, rate-limit, and a liveness alarm each), routed to three severity-tiered SNS topics subscribed to the `insightgroup-security-{high,medium,low}@nebulariscloud.com` distribution lists.
 
@@ -354,7 +362,7 @@ Copy-paste commands for each of these are in `waf-finish-checklist.md`.
 - [x] **Alarm inventory confirmed** — 20 alarms (rev 3 finding 3). Confirmed 2026-08-10.
 - [x] **No unprotected load balancer** — account-wide enumeration, 4 of 4 ALBs with a Web ACL, no `icc-alb` (rev 3 finding 2, the material half).
 - [x] **Log delivery verified on all four Web ACLs** — 28830 / 15502 / 1 / 4. **The logging deliverable is closed.**
-- [ ] **Dashboard opened and confirmed populating** (last unverified step on acceptance criterion 4)
+- [x] **Dashboard opened and confirmed populating** — done 2026-08-10. **Acceptance criterion 4 fully met.**
 - [ ] **Runbook tested** — block/unblock exercise, outcome recorded in `waf-runbook.md`
 - [x] **Orphaned `icc-alb` security group and state object removed** — completed 2026-08-10. `delete-security-group` returned success rather than `DependencyViolation`, confirming nothing referenced it.
 - [ ] **osTicket cutover prerequisites** — not a WAF item and not currently user-facing. Target group unhealthy behind a fail-open load balancer, and a redirect to an HTTPS listener that does not exist. Both must close before DNS moves. Checklist step 8d; tracked on the osTicket migration checklist.
@@ -397,7 +405,7 @@ We said at rev 3 that we would not invoice against a completion claim while a lo
 - **Monitoring verified** at 20 alarms on the corrected namespace.
 - **The state-file finding confirmed not to involve a live unprotected endpoint**, and the load balancer inventory is now known complete.
 
-**Remaining before we consider the completion claim sound:** a look at the dashboard and the runbook exercise. Both Nebularis-side, both short, and neither is a known failure. The state-hygiene cleanup that was on this list is done.
+**Remaining before we consider the completion claim sound:** the runbook exercise. One item, Nebularis-side, roughly 30 minutes, and not a known failure. The dashboard confirmation and the state-hygiene cleanup that were on this list are both done.
 
 The osTicket faults described above are **not** held against this SOW. They are cutover prerequisites for a separate migration, they are not WAF defects, and they are not currently affecting anyone.
 

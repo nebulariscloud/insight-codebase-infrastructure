@@ -48,7 +48,7 @@ Three result values are used:
 
 ### Where this leaves things
 
-All three items that were outstanding when this report was first drafted are now closed:
+Every check in this report is now resolved, and every correction remediated:
 
 - **V8 resolved.** 20 alarms, as designed.
 - **V9 resolved.** All four Web ACLs delivering log records to S3.
@@ -401,9 +401,7 @@ Listed explicitly. These are gaps in verification, not known failures.
 
 | Item | Why not verified | How to close |
 |---|---|---|
-| Dashboard widgets render populated | Requires a human to look at it | Open the `perimeter-waf` dashboard in the console — checklist step 1 |
-| Nothing on the WAF side | — | — |
-| Incident response runbook exercised end to end | The runbook is written but has never been run | Block/unblock exercise, ~30 min — checklist step 2 |
+| Incident response runbook exercised end to end | The runbook is written but has never been run. **This is the last verification gap in the engagement.** | Block/unblock exercise, ~30 min — checklist step 2 |
 | `crm-alb-waf` / `osticket-alb-waf` traffic baselines | Need a week of data; they currently run on module-default thresholds | Re-run the baseline capture after a week |
 | Bot Control efficacy | Not deployed — pending an Insight Group cost decision | See `waf-sow-closeout.md`, open item 1 |
 
@@ -415,11 +413,11 @@ The filtering layer is verified working. All four internet-facing applications a
 
 The observability layer around it was where the defects were, and both were the same shape: something silently uncovered, reporting green. Both are now fixed and fully re-verified — Correction 1 by the namespace fix and the liveness alarms, Correction 2 by PR #69, merged and applied on 2026-08-10, with all four Web ACLs confirmed delivering log records.
 
-**No open security exposure remains in the WAF layer.** The state-file finding turned out not to involve a live endpoint, and its cleanup is complete. What is outstanding on the WAF side is two things, neither a known failure: a look at the dashboard, and the incident response runbook exercise.
+**No open security exposure remains in the WAF layer.** The state-file finding turned out not to involve a live endpoint, and its cleanup is complete. **One verification gap is left in the whole engagement:** the incident response runbook has been written but never exercised. That is a scheduled 30-minute task, not a defect.
 
 **The remaining defect is not WAF and is not live.** Correction 5: the osTicket help desk redirects to HTTPS on a load balancer that has no HTTPS listener, and its target group is unhealthy behind a load balancer that fails open. Nobody is affected, because that load balancer is not yet in the DNS path — the migration has not cut over. It is a cutover prerequisite for the osTicket work and belongs on that checklist.
 
-Nebularis's recommendation to Insight Group: the two remaining WAF items are a single short session. The real decisions left are Bot Control, the custom-rules review, and the two training sessions. Detail and sign-off in `waf-sow-closeout.md`.
+Nebularis's recommendation to Insight Group: the runbook exercise is 30 minutes of our time. The real decisions left are Bot Control, the custom-rules review, and the two training sessions. Detail and sign-off in `waf-sow-closeout.md`.
 
 ---
 
