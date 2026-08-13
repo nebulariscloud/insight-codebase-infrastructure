@@ -467,11 +467,38 @@ perimeter-waf    2026-08-10T18:11:59+00:00
 - `LastModified` is post-namespace-fix, so it carries the corrected `AWS/WAFV2`
   widget definitions rather than the June ones.
 
-**Not covered by this check:** whether the widgets actually render populated.
-That needs a human to open the console. Tracked in `waf-finish-checklist.md`
-step 1 and listed under "Not yet verified" in `waf-verification-report.md`.
-Existence of a dashboard is not evidence that it displays anything — that is
-precisely the mistake V3 made.
+**Widget definitions assert the corrected namespace.** Added 2026-08-10, because
+"the dashboard exists" is not evidence that it queries the right thing:
+
+```bash
+aws cloudwatch get-dashboard --dashboard-name perimeter-waf --region us-east-2 \
+  --query 'DashboardBody' --output text \
+  | grep -o 'AWS/WAF[Vv]2' | sort -u
+```
+
+```
+AWS/WAFV2
+```
+
+One line, capital `V`, no lowercase variant anywhere in the body. A namespace
+regression would show a second line here.
+
+**Console confirmation — PASSED 2026-08-10.** A human opened the dashboard in
+Perimeter `713939170920` / us-east-2 and confirmed the widgets render populated
+with real data and graphs, not "No data available".
+
+That was the last unverified item on **SOW acceptance criterion 4** ("Monitoring
+dashboard showing real-time traffic and blocks"), which is now fully met — the
+dashboard exists, queries the correct namespace, receives data, and visibly
+displays it.
+
+**Why this needed a human at all.** Existence of a dashboard is not evidence that
+it displays anything, which is precisely the mistake V3 made. The command checks
+above establish that the data exists and the widget definitions point at it; only
+a person looking at the rendered page closes the gap between "the data is
+queryable" and "the operator can see it". The three checks together — existence,
+namespace assertion, and visual confirmation — are what the criterion actually
+requires.
 
 ## V7 — All four Web ACLs return real metric datapoints
 
@@ -1051,7 +1078,7 @@ checklist rather than carried as an open WAF item.
 | V3-R — Alarm metric pipeline publishes real datapoints | **Pass (2026-08-08)** — 500,210 metrics in `AWS/WAFV2`; 24 and 14 datapoints on the alarm dimension set; 8 alarms on the corrected namespace; liveness alarms `OK` |
 | V4 — All 3 SNS topic subscriptions confirmed | Pass (2026-06-21) |
 | V5 — Every internet-facing ALB has a Web ACL attached | **Pass (2026-08-10)** — 4 of 4, enumerated account-wide. Qualification lifted; the ALB inventory is known complete |
-| V6 — Dashboard `perimeter-waf` exists and is post-fix | **Pass (2026-08-10)** — `LastModified 2026-08-10T18:11:59`. Console eyeball still outstanding |
+| V6 — Dashboard exists, queries `AWS/WAFV2`, and renders populated | **Pass (2026-08-10)** — `LastModified 2026-08-10T18:11:59`; body references only `AWS/WAFV2`; console confirmed showing real data and graphs. **SOW acceptance criterion 4 fully met** |
 | V7 — All four Web ACLs return metric datapoints | **Pass (2026-08-10)** — 36 / 19 / 3 / 5 |
 | V8 — Alarm inventory (20 expected) and thresholds | **Pass (2026-08-10)** — 20 confirmed. First recorded as NOT VERIFIED on a stale six-alarm capture; re-run settled it |
 | V9 — Log records actually landing in S3, per Web ACL | **FAIL, then PASS (2026-08-10)** — was 28812/15492/**0**/**0**; PR #69 merged and applied; now 28830/15502/**1**/**4**. All four Web ACLs delivering |
@@ -1086,7 +1113,6 @@ attack.** The gap was in being told, not in being protected. Full numbers in
 
 These are deliberately out of scope for this verification document and tracked elsewhere:
 
-- **Dashboard widgets rendering populated.** Needs a human in the console. `waf-finish-checklist.md` step 1.
 - **Incident response runbook exercised.** Written but never run. Block/unblock exercise, ~30 min. `waf-finish-checklist.md` step 2.
 - **`crm-alb-waf` / `osticket-alb-waf` traffic baselines.** Need a week of data; both currently run on module-default thresholds. Tracked in `docs/waf/waf-traffic-baseline.md`.
 - **PCI Web ACL deployment.** Gated on the PCI account / VPC / cert landing. Template (`aws-accelerator-config/custom-stacks/pci-alb.yaml`) is built and tuned, deployment block in `customizations-config.yaml` is commented out pending pre-reqs.

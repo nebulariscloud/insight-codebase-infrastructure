@@ -8,8 +8,8 @@ Work top to bottom. Steps marked **[HUMAN]** are conversations or sessions with 
 
 | | Item | Who |
 |---|---|---|
-| Step 1 | Dashboard visual confirmation | Nebularis |
-| Step 2 | Runbook exercise | Nebularis |
+| ~~Step 1~~ | ~~Dashboard visual confirmation~~ | **DONE 2026-08-10** |
+| Step 2 | Runbook exercise — **the only WAF item left on our side** | Nebularis |
 | Step 3 | Bot Control decision | **Insight Group** |
 | Step 4 | Custom rules review | **Insight Group** (4 owner conversations) |
 | Step 5 | Two training sessions | Both |
@@ -26,7 +26,7 @@ Steps 6 and 7 were added after a wider verification round on 2026-08-10 found th
 - **Alarm inventory: 20.** The earlier six-alarm reading was stale, from before #62's apply.
 - **Account-wide load balancer enumeration: 7 LBs, 4 ALBs, all four with a Web ACL, no `icc-alb`.** The orphaned state does not correspond to a live unprotected endpoint. Step 7 drops from "possible security exposure" to state cleanup.
 - **PRs #58, #69 and #70 all merged**; nothing open.
-- **Step 1: everything checkable by command has passed.** Dashboard exists, body references only `AWS/WAFV2`, all four Web ACLs returning datapoints. Only the console eyeball is left.
+- **Step 1 DONE.** Dashboard exists, body references only `AWS/WAFV2`, all four Web ACLs returning datapoints, and a human confirmed the widgets render populated. **SOW acceptance criterion 4 fully met.**
 - **Step 7 DONE.** Resolved to scenario (c) — the `icc-alb` load balancer was already destroyed, and the destroy had been partial. `icc-alb-sg` (`sg-076c916a807936cee`) deleted, state object and lock digest removed, backup taken. Certificate inventory clean: four certs, all accounted for.
 
 > ### osTicket has two latent faults — step 8d. **Cutover prerequisite, not an outage.**
@@ -40,7 +40,7 @@ Steps 6 and 7 were added after a wider verification round on 2026-08-10 found th
 >
 > Consequence for the SOW record: `osticket-alb-waf` is deployed, attached, logging and alarming, but until DNS moves it is inspecting test traffic rather than real users. Stated plainly in `waf-sow-closeout.md`.
 
-**Priority order:** step 1 (open the dashboard — last item on acceptance criterion 4), then step 2 (the ~30 minute runbook exercise). Those two are all that gate SOW sign-off on our side. Step 8d moves to the osTicket migration checklist. Steps 3–5 need Insight Group.
+**Priority order: step 2 is the only thing left on the Nebularis side** — the ~30 minute runbook exercise. Steps 3–5 need Insight Group. Step 8d belongs to the osTicket migration checklist.
 
 ---
 
@@ -77,9 +77,15 @@ git ls-tree --name-only insight-remote/main docs/waf/   # expect 12 files
 
 ---
 
-## Step 1 — Confirm the dashboard populates
+## Step 1 — Confirm the dashboard populates — **DONE 2026-08-10**
 
-Last unverified item on SOW acceptance criterion 4. The dashboard rendered empty until the namespace fix; nobody has looked since.
+> **COMPLETE.** All three checks passed: the dashboard exists and post-dates the
+> namespace fix, its widget definitions reference only `AWS/WAFV2`, and a human
+> confirmed in the console that the widgets render populated with real data and
+> graphs. **SOW acceptance criterion 4 is fully met.**
+
+Retained below as the standing procedure — re-run it after any change to the
+`waf-monitoring` module or leaf.
 
 ### What and where
 
@@ -153,12 +159,9 @@ done
 - [x] Dashboard `perimeter-waf` exists — `LastModified 2026-08-10T18:11:59`
 - [x] `get-dashboard` prints **only** `AWS/WAFV2` — confirmed 2026-08-10, single line of output, no lowercase-`v` variant anywhere in the body
 - [x] All four Web ACLs report datapoints > 0 — 36 / 19 / 3 / 5
-- [ ] Opened the dashboard in the console and the widgets show values, not "No data available"
+- [x] Opened the dashboard in the console and the widgets show values, not "No data available" — **confirmed 2026-08-10, populated with real data and graphs**
 
-**Only the console eyeball is left on this step.** Everything checkable by command
-has passed, which means if the widgets *do* render empty it is a console or
-time-range issue, not a data problem — set the range to 3 hours before concluding
-anything.
+**Step 1 complete. SOW acceptance criterion 4 is fully met.**
 
 `crm-alb-waf` and `osticket-alb-waf` may show 0 briefly if their ALBs are idle — widen the dashboard time range to 3 hours, or re-run after some traffic.
 
@@ -1236,10 +1239,9 @@ Then set per-ACL thresholds at roughly 1.5–2× observed peak in `terraform/liv
 
 SOW is signable when **Steps 1–6** are complete. **Step 6 and Step 7 are both done.**
 
-That leaves exactly two items on the Nebularis side:
+**Steps 1, 6 and 7 are done.** That leaves exactly one item on the Nebularis side:
 
-1. **Step 1** — open the dashboard, confirm the widgets populate. Everything checkable by command has already passed, so this is a five-minute look.
-2. **Step 2** — the ~30 minute runbook exercise.
+- **Step 2** — the ~30 minute runbook exercise. The SOW says the runbook must be "tested and validated"; it is written but has never been run.
 
 Then the four that need Insight Group: Bot Control, custom rules, and the two training sessions (steps 3, 4, 5).
 
