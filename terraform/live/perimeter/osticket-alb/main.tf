@@ -75,7 +75,7 @@ module "alb" {
   health_check_path    = var.health_check_path
   health_check_matcher = var.health_check_matcher
 
-  certificate_arn = var.enable_https ? aws_acm_certificate.osticket.arn : ""
+  certificate_arn = var.enable_https ? local.osticket_cert.arn : ""
   enable_waf      = true
   waf_web_acl_arn = module.waf.web_acl_arn
 
@@ -96,9 +96,41 @@ module "alb" {
 # records, so they are emitted via the acm_validation_records output for the DNS
 # admin to add once. Deliberately no aws_acm_certificate_validation resource —
 # it would block the apply waiting on records Terraform does not control.
+#
+# ---------------------------------------------------------------------------
+# WHY for_each ON A SINGLE-ELEMENT SET
+#
+# An ACM request that is not validated within 72 hours moves to
+# VALIDATION_TIMED_OUT and can never be validated afterwards. AWS's documented
+# remedy is to delete it and request a NEW certificate:
+# https://docs.aws.amazon.com/acm/latest/userguide/troubleshooting-cert-requests.html
+#
+# The trap: `status` is a COMPUTED attribute, so a timed-out certificate
+# produces no plan diff. Re-running the apply changes nothing and the leaf sits
+# on a dead certificate indefinitely. Something in the CONFIG has to change.
+#
+# Keying the resource on cert_request_serial puts the serial in the resource
+# ADDRESS (aws_acm_certificate.osticket["2"]). Bumping the serial in tfvars is
+# then an unambiguous create-then-destroy, which is the only thing that
+# reliably forces a fresh request through CI — where `-replace` is not
+# available, because the workflow exposes no extra-args input.
+#
+# Expect this to be used again. The validation record is published by hand at
+# Network Solutions, so a 72-hour timeout is a foreseeable repeat, not a
+# one-off.
+#
+# REJECTED: lifecycle.replace_triggered_by on a terraform_data holding the
+# serial. Per the Terraform docs a reference only triggers replacement when the
+# referenced instance is planned to be UPDATED or REPLACED — merely CREATING it
+# does not count. The first apply would create the terraform_data and replace
+# nothing at all, silently. That is the worst possible failure for something on
+# the cutover critical path.
+# ---------------------------------------------------------------------------
 ###############################################################################
 
 resource "aws_acm_certificate" "osticket" {
+  for_each = toset([tostring(var.cert_request_serial)])
+
   domain_name       = var.osticket_host
   validation_method = "DNS"
 
@@ -109,6 +141,12 @@ resource "aws_acm_certificate" "osticket" {
   tags = {
     Role = "osticket-alb-cert"
   }
+}
+
+locals {
+  # The one instance of the certificate above. Referenced instead of the
+  # resource directly so the for_each key lives in exactly one place.
+  osticket_cert = aws_acm_certificate.osticket[tostring(var.cert_request_serial)]
 }
 
 ###############################################################################
@@ -144,7 +182,7 @@ output "alb_arn" {
 
 output "certificate_arn" {
   description = "ACM cert ARN. Set enable_https = true once it is ISSUED."
-  value       = aws_acm_certificate.osticket.arn
+  value       = local.osticket_cert.arn
 }
 
 output "acm_validation_records" {
@@ -154,7 +192,7 @@ output "acm_validation_records" {
     enable_https = true and re-apply.
   EOT
   value = {
-    for dvo in aws_acm_certificate.osticket.domain_validation_options :
+    for dvo in local.osticket_cert.domain_validation_options :
     dvo.domain_name => {
       name  = dvo.resource_record_name
       type  = dvo.resource_record_type
