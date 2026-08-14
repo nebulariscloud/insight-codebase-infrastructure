@@ -44,6 +44,14 @@ health_check_matcher = "200,301,302"
 # Stage 1: HTTP-only until the ACM cert validates. Flip to true afterwards.
 enable_https = false
 
+# Bumped 1 -> 2 on 2026-08-13. The osticket.* request created on 2026-08-10 was
+# never validated — the CNAME was never published at Network Solutions — so it
+# hit ACM's 72-hour limit and moved to VALIDATION_TIMED_OUT, which is terminal.
+# A timed-out cert shows no plan diff (status is computed), so re-applying would
+# have changed nothing; bumping this serial is what forces a new request.
+# See variables.tf for the mechanism, and main.tf for why it is done this way.
+cert_request_serial = 2
+
 ###############################################################################
 # Cert replacement history — read before chasing a validation CNAME.
 #
@@ -53,12 +61,19 @@ enable_https = false
 #   1. arn:...:certificate/aaed79b9-5a02-4c35-bc23-276c4bc87b48
 #      domain tickets.insightgrouppr.com. Never validated, never attached.
 #      Destroyed by the replacement.
-#   2. A new cert for osticket.insightgrouppr.com, created by the replacement.
+#   2. arn:...:certificate/8c2c365f-a408-4bbf-8f6e-187a28665057
+#      domain osticket.insightgrouppr.com, created by the replacement and
+#      applied 2026-08-10 (CI run 31396689872). Its validation CNAME
+#      (_59bfd12229b222d5a7e78deac7838a08.osticket...) was never published, so
+#      it hit ACM's 72-hour limit on 2026-08-13 and went VALIDATION_TIMED_OUT.
+#      Terminal — a timed-out request cannot be validated later.
+#   3. A new cert for osticket.insightgrouppr.com, forced by
+#      cert_request_serial = 2 below. Record its ARN here once applied.
 #
-# CONSEQUENCE: the new cert has its OWN validation CNAME. If anyone already
-# added the first cert's CNAME at Network Solutions, it is now useless and the
-# new one has to be added instead. Always re-read the output rather than
-# assuming a previously-added record still applies:
+# CONSEQUENCE: every one of these has its OWN validation CNAME. If anyone
+# already added an earlier cert's CNAME at Network Solutions, it is now useless
+# and the current one has to be added instead. Always re-read the output rather
+# than assuming a previously-added record still applies:
 #
 #   terraform output acm_validation_records
 #

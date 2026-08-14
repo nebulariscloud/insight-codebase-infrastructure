@@ -32,6 +32,12 @@ osticket_port      = 80
 # a mixed-case value makes the domain_validation_options key not match.
 osticket_host = "osticket.insightgrouppr.com"
 
+# Bump by one to discard the current ACM request and issue a new certificate.
+# Needed when a request is not validated within 72 hours and goes to
+# VALIDATION_TIMED_OUT, which is terminal and shows no plan diff. See
+# variables.tf.
+cert_request_serial = 1
+
 # osTicket's "/" usually 302s, so redirects count as healthy.
 health_check_path    = "/"
 health_check_matcher = "200,301,302"

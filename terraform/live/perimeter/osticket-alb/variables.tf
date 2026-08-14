@@ -63,6 +63,44 @@ variable "osticket_host" {
   type        = string
 }
 
+variable "cert_request_serial" {
+  description = <<-EOT
+    Bump this by one to throw away the current ACM certificate request and
+    issue a brand new one.
+
+    WHEN YOU NEED IT: an ACM request that is not validated within 72 hours goes
+    to VALIDATION_TIMED_OUT and can never be validated afterwards. AWS's
+    remedy is to delete it and request a new certificate. Because `status` is a
+    computed attribute, a timed-out certificate shows NO plan diff — re-running
+    the apply will not fix it. Bumping this serial is what forces the new
+    request.
+
+    HOW IT WORKS: the certificate is declared with
+    `for_each = toset([tostring(var.cert_request_serial)])`, so the serial is
+    part of the resource address. Changing it is a create-then-destroy rather
+    than a no-op. See the long comment above the resource in main.tf.
+
+    AFTER BUMPING: the new certificate has a DIFFERENT validation CNAME. Read
+    `terraform output acm_validation_records` from the apply log and publish
+    that one — any previously published record is dead.
+
+    Expect to need this again: the validation record is added by hand at
+    Network Solutions, so a 72-hour timeout is a foreseeable repeat.
+
+    History:
+      1 -> initial request (hostname tickets.*, then osticket.* after PR #57).
+           The osticket.* request timed out unvalidated on 2026-08-13.
+      2 -> re-request after that timeout.
+  EOT
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.cert_request_serial >= 1 && floor(var.cert_request_serial) == var.cert_request_serial
+    error_message = "cert_request_serial must be a whole number >= 1."
+  }
+}
+
 variable "health_check_path" {
   description = <<-EOT
     HTTP health check path on the backend.
