@@ -130,11 +130,29 @@ resource "aws_kms_alias" "iccmaindb" {
 # DB subnet group across the shared-prod data subnets
 ###############################################################################
 
+locals {
+  # Revision 1 deliberately yields the ORIGINAL name, so the variable's default
+  # is a true no-op. A variable whose default silently renames live
+  # infrastructure is a landmine; this keeps the rename driven only by an
+  # explicit bump.
+  db_subnet_group_name = (
+    var.db_subnet_group_revision == 1
+    ? "${var.identifier}-subnet-group"
+    : "${var.identifier}-subnet-group-${var.db_subnet_group_revision}"
+  )
+}
+
 resource "aws_db_subnet_group" "iccmaindb" {
-  name       = "${var.identifier}-subnet-group"
+  name       = local.db_subnet_group_name
   subnet_ids = var.db_subnet_ids
 
-  tags = { Name = "${var.identifier}-subnet-group" }
+  tags = { Name = local.db_subnet_group_name }
+
+  # The instance must be modified onto the new group before the old one can be
+  # deleted — RDS refuses to delete a subnet group that is still referenced.
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 ###############################################################################
@@ -280,7 +298,7 @@ resource "aws_db_instance" "iccmaindb" {
 
   # Auto minor version upgrades off during migration — we control the version.
   auto_minor_version_upgrade = false
-  apply_immediately          = false
+  apply_immediately          = var.apply_immediately
 
   lifecycle {
     ignore_changes = [
