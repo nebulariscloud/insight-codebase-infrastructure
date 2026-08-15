@@ -98,6 +98,59 @@ variable "vpc_id" {
   type        = string
 }
 
+variable "db_subnet_group_revision" {
+  description = <<-EOT
+    Bump this by one whenever db_subnet_ids changes, to actually RELOCATE the
+    running instance.
+
+    WHY THIS EXISTS. Changing db_subnet_ids alone only calls
+    ModifyDBSubnetGroup, which rewrites the group's membership. It does NOT
+    change db_subnet_group_name on the instance, so RDS has no trigger to
+    re-place the instance's network interfaces: the apply reports success, the
+    group lists the new subnets, and the database keeps answering on its old
+    addresses. Bumping this revision changes the group NAME, which changes
+    db_subnet_group_name on the instance, which is what makes RDS move it.
+
+    Revision 1 resolves to the original name (`<identifier>-subnet-group`) so
+    the default is a no-op — see the local in main.tf.
+
+    ALWAYS PAIR IT with a db_subnet_ids change. Bumping this alone renames the
+    group and moves nothing of substance.
+
+    History:
+      1 -> data-a + data-b (10.12.0.64/26, 10.12.0.128/26). Both inside
+           10.12.0.0/24, which is Kennedy's Azure range, so their reporting
+           clients could not reach the DB over the VPN.
+      2 -> app-a + app-b (10.12.1.0/24, 10.12.2.0/24), clear of that range.
+  EOT
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.db_subnet_group_revision >= 1 && floor(var.db_subnet_group_revision) == var.db_subnet_group_revision
+    error_message = "db_subnet_group_revision must be a whole number >= 1."
+  }
+}
+
+variable "apply_immediately" {
+  description = <<-EOT
+    Whether RDS applies modifications at once instead of deferring them to the
+    maintenance window (maintenance_window, currently wed:05:30-wed:06:30).
+
+    Default false, which is right for routine changes on a live database.
+
+    SET IT TRUE for a subnet-group move. Otherwise RDS accepts the change as a
+    PENDING modification and nothing relocates until the next maintenance
+    window — a second way for the apply to look successful while the instance
+    stays exactly where it was. Revert to false once the move is confirmed.
+
+    Note this is a provider behaviour flag, not a database attribute: on its own
+    it triggers no API call, so a plan showing only this change does nothing.
+  EOT
+  type        = bool
+  default     = false
+}
+
 variable "db_subnet_ids" {
   description = "shared-prod DATA subnet IDs (data-a + data-b) for the DB subnet group."
   type        = list(string)

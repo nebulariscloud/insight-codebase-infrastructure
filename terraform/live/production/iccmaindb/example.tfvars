@@ -18,9 +18,18 @@ engine_version        = "5.7.44"
 
 vpc_id = "vpc-04a8720d0ddb40713"
 db_subnet_ids = [
-  "subnet-REPLACE_DATA_A",
-  "subnet-REPLACE_DATA_B",
+  "subnet-REPLACE_A",
+  "subnet-REPLACE_B",
 ]
+
+# Bump this EVERY time db_subnet_ids changes, or the instance will not actually
+# move — changing the IDs alone leaves db_subnet_group_name unchanged and RDS
+# never re-places the network interfaces. Revision 1 = the original group name.
+db_subnet_group_revision = 1
+
+# Set true only while performing a subnet-group move, otherwise RDS defers it to
+# the maintenance window and nothing relocates. Revert to false afterwards.
+apply_immediately = false
 
 app_client_cidrs = ["10.12.0.0/16"]
 
