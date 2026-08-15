@@ -27,8 +27,27 @@ identifier            = "iccmaindb"
 instance_class        = "db.t3.small"
 allocated_storage_gib = 50
 storage_type          = "gp3"
-multi_az              = true
-engine_version        = "5.7.44"
+# TEMPORARILY false to permit the subnet-group move. RDS refuses to change a DB
+# instance's subnet group while Multi-AZ is enabled, and it treats ANY subnet
+# group change as a "VPC move" even when the target subnets are in the same VPC:
+#
+#   InvalidParameterCombination: You cannot move a DB instance with Multi-Az
+#   enabled to a VPC
+#
+# (PR #81 apply, 2026-08-14, RequestID d3b6dcc3-959b-4568-b63e-3113f62218f1.)
+#
+# AWS's documented remedy is exactly this: convert to single-AZ, move, convert
+# back. See "Updating the VPC for a DB instance":
+# https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_VPC.VPC2VPC.html
+#
+# Acceptable here because this instance is a pre-cutover replica serving no
+# traffic — the standby protects nothing yet, and running single-AZ also halves
+# its cost in the meantime.
+#
+# !! RESTORE TO true BEFORE CUTOVER !! Tracked in
+# docs/07-Operations/cti-v7-open-items.md section B.
+multi_az       = false
+engine_version = "5.7.44"
 
 vpc_id = "vpc-04a8720d0ddb40713"
 
