@@ -27,89 +27,82 @@ identifier            = "iccmaindb"
 instance_class        = "db.t3.small"
 allocated_storage_gib = 50
 storage_type          = "gp3"
-# TEMPORARILY false to permit the subnet-group move. RDS refuses to change a DB
-# instance's subnet group while Multi-AZ is enabled, and it treats ANY subnet
-# group change as a "VPC move" even when the target subnets are in the same VPC:
-#
-#   InvalidParameterCombination: You cannot move a DB instance with Multi-Az
-#   enabled to a VPC
-#
-# (PR #81 apply, 2026-08-14, RequestID d3b6dcc3-959b-4568-b63e-3113f62218f1.)
-#
-# AWS's documented remedy is exactly this: convert to single-AZ, move, convert
-# back. See "Updating the VPC for a DB instance":
-# https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_VPC.VPC2VPC.html
-#
-# Acceptable here because this instance is a pre-cutover replica serving no
-# traffic — the standby protects nothing yet, and running single-AZ also halves
-# its cost in the meantime.
-#
-# !! RESTORE TO true BEFORE CUTOVER !! Tracked in
-# docs/07-Operations/cti-v7-open-items.md section B.
-multi_az       = false
+# Restored to true 2026-08-16. It was set false only to permit a subnet-group
+# move that turned out to be impossible — see the block above db_subnet_ids.
+# The instance was left single-AZ in AWS by an out-of-band
+# `modify-db-instance --no-multi-az`, so this change is what brings it back.
+multi_az       = true
 engine_version = "5.7.44"
 
 vpc_id = "vpc-04a8720d0ddb40713"
 
-# shared-prod APP subnets (app-a us-east-2a + app-b us-east-2b).
-#   app-a subnet-00d31cac6422417c4 = 10.12.1.0/24  (236 free)
-#   app-b subnet-093296184eb7e6e64 = 10.12.2.0/24  (250 free)
-#
-# MOVED here 2026-08-14 from the data subnets. Superseded values, for reference:
+# shared-prod DATA subnets (data-a us-east-2a + data-b us-east-2b).
 #   data-a subnet-092d9baf6d34778e2 = 10.12.0.64/26
 #   data-b subnet-0e802f8a78c72c225 = 10.12.0.128/26
 #
-# WHY THE MOVE (resolves the former "KNOWN ISSUE" block here).
-# The data subnets sit inside 10.12.0.0/24. The client confirmed on 2026-08-14
-# that this is the Kennedy site's AZURE range — earlier notes called it a camera
-# network, which was wrong and came from an unrelated conversation. Because
-# Kennedy holds a more-specific local route for that space, its FortiGate would
-# never send DB traffic over the VPN, so Kennedy's reporting clients could not
-# reach this database. Verified concretely: the instance's ENIs were at
-# 10.12.0.110 (data-a) and 10.12.0.148 / 10.12.0.165 (data-b).
+###############################################################################
+# 🛑 DO NOT TRY TO MOVE THIS INSTANCE BETWEEN SUBNETS OF THIS VPC. IT CANNOT BE
+#    DONE. Two applies were spent proving it on 2026-08-14.
 #
-# Three options existed: (a) Kennedy adds static routes for our two /26s,
-# (b) DNAT on their FortiGate, (c) we move. Chose (c) — it needs nothing from the
-# client, requires no knowledge of which Azure addresses are actually in use,
-# clears the whole /24 rather than two /26s, and is nearly free while this
-# instance still serves no traffic. Details: docs/07-Operations/cti-v7-open-items.md
-# sections A2 and B1.
+# `ModifyDBInstance --db-subnet-group-name` exists ONLY to move an instance
+# between VPCs. Within one VPC, RDS refuses outright:
 #
-# WHY THE APP SUBNETS ARE SAFE TARGETS, verified 2026-08-14:
-#   * Same AZs as the current placement (2a + 2b), so no AZ change. The instance
-#     is Multi-AZ, primary us-east-2a / secondary us-east-2b.
-#   * Capacity: 236 and 250 free addresses. RDS needs spare addresses per subnet
-#     for failover and maintenance.
-#   * Both are RAM-shared to Production, so this account can reference them. Not
-#     a given — the orphaned public subnet 10.12.0.32/27 is NOT shared here, which
-#     is what actually killed cti-v7 on 2026-08-08.
-#   * Egress is unchanged: rt-data-a/b and rt-app-a/b all carry 0.0.0.0/0 -> TGW,
-#     so the replication path (TGW -> egress VPC -> NAT -> source RDS) is
-#     identical. The app tables merely add S3/DynamoDB gateway endpoints.
+#   InvalidVPCNetworkStateFault: You cannot move DB instance iccmaindb to subnet
+#   group iccmaindb-subnet-group-2. The specified DB subnet group and DB instance
+#   are in the same VPC. Choose a DB subnet group in different VPC than the
+#   specified DB instance and try again.
+#   (RequestID bad53fa3-6039-4c65-a9c9-1f9909288aa5)
 #
-# RESIDUAL RISK: no site DECLARES 10.12.1.x or 10.12.2.x, but the full four-site
-# IP inventory is still outstanding (open item A1) and Kennedy's Azure range was
-# itself learned incidentally. If another site turns out to use these ranges, the
-# same move applies in reverse — bump db_subnet_group_revision again.
+# A Multi-AZ rejection is hit FIRST and is a red herring — clearing it only gets
+# you to the real wall above:
+#
+#   InvalidParameterCombination: You cannot move a DB instance with Multi-Az
+#   enabled to a VPC
+#   (RequestID d3b6dcc3-959b-4568-b63e-3113f62218f1)
+#
+# Adding NEW LZA subnets outside 10.12.0.0/24 does not help either: still the
+# same VPC. And note the plan CANNOT catch any of this — plan-time validation
+# never calls ModifyDBInstance, so the plan looks perfect and the apply fails.
+###############################################################################
+#
+# THE PROBLEM THAT PROMPTED THE ATTEMPT, still open.
+# These data subnets sit inside 10.12.0.0/24, which the client confirmed on
+# 2026-08-14 is the Kennedy site's AZURE range. (Earlier notes called it a camera
+# network; that was wrong and came from an unrelated conversation.) Kennedy holds
+# a more-specific local route for that space, so its FortiGate would never send
+# DB traffic over the VPN and Kennedy's reporting clients cannot reach this
+# database. Verified concretely: the ENIs are at 10.12.0.110 (data-a) and
+# 10.12.0.148 / 10.12.0.165 (data-b).
+#
+# THE TWO PATHS THAT REMAIN — tracked as open item B9:
+#   (a) Kennedy adds static routes for 10.12.0.64/26 and 10.12.0.128/26 pointing
+#       at the VPN tunnel. More specific than their local /24, so they win, and
+#       no NAT anywhere. Minutes of work, nothing needed from us. Requires
+#       confirming Azure does not occupy 10.12.0.64-10.12.0.191.
+#   (b) Rebuild: snapshot this instance and RestoreDBInstanceFromDBSnapshot into
+#       a subnet group on the app subnets. Restore DOES accept a subnet group,
+#       unlike modify. Then re-establish replication from the captured
+#       coordinate. Fully in our control and permanent, but it is a rebuild.
+#
+# If (b) is chosen, the app subnets are the target and were verified suitable on
+# 2026-08-14: app-a subnet-00d31cac6422417c4 = 10.12.1.0/24 us-east-2a (236 free),
+# app-b subnet-093296184eb7e6e64 = 10.12.2.0/24 us-east-2b (250 free); same AZs as
+# now; both RAM-shared to Production; and rt-app-a/b carry the same
+# 0.0.0.0/0 -> TGW egress as rt-data-a/b, so the replication path is unchanged.
 db_subnet_ids = [
-  "subnet-00d31cac6422417c4", # app-a, 10.12.1.0/24, us-east-2a
-  "subnet-093296184eb7e6e64", # app-b, 10.12.2.0/24, us-east-2b
+  "subnet-092d9baf6d34778e2", # data-a, 10.12.0.64/26,  us-east-2a
+  "subnet-0e802f8a78c72c225", # data-b, 10.12.0.128/26, us-east-2b
 ]
 
-# Bumped 1 -> 2 together with db_subnet_ids above. REQUIRED: changing the subnet
-# IDs alone only rewrites the group's membership and leaves db_subnet_group_name
-# on the instance untouched, so RDS never re-places the network interfaces and the
-# database keeps answering on 10.12.0.x while the apply reports success. The
-# revision changes the group NAME, which is what triggers the move. See
-# variables.tf.
-db_subnet_group_revision = 2
+# Back to 1 (the original group name, iccmaindb-subnet-group) after the failed
+# move. The mechanism itself is sound and worth keeping for a genuine cross-VPC
+# move or a rebuild — see variables.tf — it just cannot relocate an existing
+# instance inside one VPC.
+db_subnet_group_revision = 1
 
-# TEMPORARY for the move — revert to false once the new addresses are confirmed.
-# With the default false, RDS records the subnet-group change as a PENDING
-# modification and relocates nothing until the maintenance window
-# (wed:05:30-wed:06:30) — the second way this change can look applied and not be.
-# Safe to force here: this instance serves no traffic pre-cutover, so the
-# interruption costs nothing. Re-run mysql.rds_start_replication afterwards.
+# Still true ONLY so the multi_az restoration in this PR executes on apply rather
+# than deferring to the maintenance window (wed:05:30-wed:06:30). A follow-up PR
+# sets it back to false once Multi-AZ is confirmed — open item B8.
 apply_immediately = true
 
 # App-tier clients that reach MySQL (WS Aheeva, the two webapps, osTicket, n8n —
