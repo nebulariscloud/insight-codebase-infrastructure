@@ -100,10 +100,19 @@ db_subnet_ids = [
 # instance inside one VPC.
 db_subnet_group_revision = 1
 
-# Still true ONLY so the multi_az restoration in this PR executes on apply rather
-# than deferring to the maintenance window (wed:05:30-wed:06:30). A follow-up PR
-# sets it back to false once Multi-AZ is confirmed — open item B8.
-apply_immediately = true
+# false is the correct steady state: modifications wait for the maintenance
+# window (wed:05:30-wed:06:30) instead of interrupting the database the moment a
+# PR merges. Restored 2026-08-16 once Multi-AZ was confirmed back on.
+#
+# It was true only briefly, to force two changes to execute on apply rather than
+# be deferred: the (failed) subnet-group move, and the multi_az restoration.
+#
+# ⚠️ If you ever need a change to take effect immediately, set this true IN THE
+# SAME PR and revert it afterwards. Leaving it false and expecting an instant
+# change is a silent no-op — RDS accepts the modification, reports success, and
+# applies nothing until Wednesday morning. That trap cost real time on
+# 2026-08-14; see the block above db_subnet_ids.
+apply_immediately = false
 
 # App-tier clients that reach MySQL (WS Aheeva, the two webapps, osTicket, n8n —
 # anything inside shared-prod). Private only.
