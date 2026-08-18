@@ -41,8 +41,18 @@ osticket_host = "osticket.insightgrouppr.com"
 health_check_path    = "/"
 health_check_matcher = "200,301,302"
 
-# Stage 1: HTTP-only until the ACM cert validates. Flip to true afterwards.
-enable_https = false
+# Stage 2, enabled 2026-08-16. The ACM cert for osticket.insightgrouppr.com is
+# ISSUED — the validation CNAME was published at Network Solutions and confirmed
+# authoritative against ns47.worldnic.com, with no double-suffix artifact.
+#
+# Effect: an HTTPS:443 listener attaches with the cert, and HTTP:80 starts
+# 301-redirecting to it. An ELB listener can only reference an ISSUED cert, so do
+# not set this true before the cert has actually issued.
+#
+# This does NOT move user traffic. The public DNS record still points at the
+# Lightsail box; this only makes the ALB serve HTTPS on its own address, which is
+# what the pre-cutover verification test uses.
+enable_https = true
 
 # Bumped 1 -> 2 on 2026-08-13. The osticket.* request created on 2026-08-10 was
 # never validated — the CNAME was never published at Network Solutions — so it
