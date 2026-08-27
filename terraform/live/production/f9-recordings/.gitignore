@@ -1,0 +1,4 @@
+# This leaf's terraform.tfvars contains only the public account ID, the
+# stack name, and bucket configuration flags. Safe to commit. Override the
+# parent terraform/.gitignore so CI can read it via -var-file=terraform.tfvars.
+!terraform.tfvars
