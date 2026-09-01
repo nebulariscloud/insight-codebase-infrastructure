@@ -217,6 +217,17 @@
         "account:DeleteAlternateContact"
       ],
       "Resource": "*"
+    },
+    {
+      "Sid": "Inspector2Baseline",
+      "Effect": "Allow",
+      "Action": [
+        "inspector2:Enable",
+        "inspector2:Disable",
+        "inspector2:BatchGetAccountStatus",
+        "inspector2:ListAccountPermissions"
+      ],
+      "Resource": "*"
     }
   ]
 }
