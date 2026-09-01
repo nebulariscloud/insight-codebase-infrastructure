@@ -245,10 +245,10 @@ Every deferred row pointing at a missing permission or unsatisfied prerequisite 
 |---|---|---|---|---|---|---|---|---|
 | 2 | `IAM.28` | Access Analyzer external access analyzer enabled | `LZA-Config` | `security-config.yaml` `accessAnalyzer.enable` (LZA already sets `true`; investigate why analyzer not landing in PCI account/regions) | Per-account, per-region | 3/3/4 | 19 | 1 |
 | 3 | `EC2.182` | Block public access for EBS snapshots | `Terraform` | `terraform/modules/security-baseline/ebs.tf` (`aws_ebs_snapshot_block_public_access`) — **Wave 1 implementation complete** in `terraform/modules/security-baseline/ebs-snapshot-public-access.tf`, applied via `terraform/live/pci/security-baseline/` | All 3 regions | 3/2/4 | 17 | 1 |
-| 4 | `Inspector.1` | Inspector EC2 scanning | `Deferred` → `Terraform` | `terraform/modules/security-baseline/inspector.tf` once D-1 lands | `us-east-1`, `us-west-2` | 3/1/3 | 14 | 2 |
-| 5 | `Inspector.2` | Inspector ECR scanning | `Deferred` → `Terraform` | same module | `us-east-1`, `us-west-2` | 3/1/3 | 14 | 2 |
-| 6 | `Inspector.3` | Inspector Lambda code scanning | `Deferred` → `Terraform` | same module | `us-east-1`, `us-west-2` | 3/1/3 | 14 | 2 |
-| 7 | `Inspector.4` | Inspector Lambda standard scanning | `Deferred` → `Terraform` | same module | `us-east-1`, `us-west-2` | 3/1/3 | 14 | 2 |
+| 4 | `Inspector.1` | Inspector EC2 scanning | `Terraform` | `terraform/modules/security-baseline/inspector.tf` — **Wave 2 implementation complete 2026-08-20**, applied via `terraform/live/pci/security-baseline/` | `us-east-1`, `us-west-2` | 3/1/3 | 14 | 2 |
+| 5 | `Inspector.2` | Inspector ECR scanning | `Terraform` | same module — **Wave 2 implementation complete 2026-08-20** | `us-east-1`, `us-west-2` | 3/1/3 | 14 | 2 |
+| 6 | `Inspector.3` | Inspector Lambda code scanning | `Terraform` | same module — **Wave 2 implementation complete 2026-08-20** | `us-east-1`, `us-west-2` | 3/1/3 | 14 | 2 |
+| 7 | `Inspector.4` | Inspector Lambda standard scanning | `Terraform` | same module — **Wave 2 implementation complete 2026-08-20** | `us-east-1`, `us-west-2` | 3/1/3 | 14 | 2 |
 
 #### Medium
 
@@ -385,7 +385,7 @@ Rollback: LZA-Config and Config-Rule-SSM changes are PR-reverted. Terraform chan
 
 | ID | Related findings | Question | Options | Owner | Impact of delay |
 |---|---|---|---|---|---|
-| D-1 | `Inspector.1/2/3/4` | Activate Inspector v2 in `us-east-1` and `us-west-2`? Which resource types? | (a) all four resource types both regions; (b) EC2 + ECR only; (c) defer until home region (`us-east-2`) baseline confirmed | Alex | High and Medium findings persist; Wave 2 cannot complete |
+| D-1 | `Inspector.1/2/3/4` | Activate Inspector v2 in `us-east-1` and `us-west-2`? Which resource types? | (a) all four resource types both regions; (b) EC2 + ECR only; (c) defer until home region (`us-east-2`) baseline confirmed | Alex | **RESOLVED 2026-08-20: option (a) — all four resource types (`EC2`, `ECR`, `LAMBDA`, `LAMBDA_CODE`) in `us-east-1` and `us-west-2`. Implemented via `inspector_enabled = true`, `inspector_resource_types`, and `inspector_regions` variables in `terraform/live/pci/security-baseline/main.tf`. Resolves Inspector.1, Inspector.2, Inspector.3, Inspector.4.** |
 | D-2 | `S3.22`, `S3.23` | Extend Control Tower `BaselineCloudTrail` with org-wide S3 data events, or create a new dedicated trail? | (a) extend baseline trail (single source of truth, simpler); (b) create new LZA-managed trail (cleaner separation, double cost) | Alex | **RESOLVED 2026-06-15: option (a) — extend baseline trail via Terraform `security-baseline` module to avoid duplicate trail cost. LZA has no primitive to add selectors to a Control Tower-managed trail, so Terraform is the clean implementation. Operational caveat: re-running Control Tower landing-zone setup wizard can reset custom selectors; mitigation is a re-apply step in `pci-onboarding-guide.md`.** |
 | D-3 | `CloudFormation.3` | Enable termination protection on LZA-managed stacks without breaking the pipeline? | (a) workload stacks only; (b) everywhere, validate LZA pipeline tolerates it; (c) park — accept the finding for LZA-managed stacks | LZA owner | Medium finding persists; (c) requires a documented compensating control |
 | D-4 | `CloudFormation.4` | Attach a service role to LZA-managed stacks? | (a) yes via LZA — confirm primitive; (b) park — LZA pipeline already runs as a controlled principal | LZA owner | Medium finding persists |

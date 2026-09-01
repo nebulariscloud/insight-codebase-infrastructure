@@ -28,6 +28,9 @@ module "security_baseline" {
   security_contact_phone = data.aws_ssm_parameter.security_contact_phone.value
   security_contact_title = var.security_contact_title
 
-  # Inspector deferred to decision item D-1.
-  inspector_enabled = false
+  # D-1 resolved 2026-08-20: all four resource types, us-east-1 and us-west-2.
+  # Resolves Inspector.1 (EC2), Inspector.2 (ECR), Inspector.3 (LAMBDA_CODE), Inspector.4 (LAMBDA).
+  inspector_enabled        = true
+  inspector_resource_types = ["EC2", "ECR", "LAMBDA", "LAMBDA_CODE"]
+  inspector_regions        = ["us-east-1", "us-west-2"]
 }
