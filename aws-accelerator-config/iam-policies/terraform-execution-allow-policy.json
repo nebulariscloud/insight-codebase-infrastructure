@@ -233,10 +233,7 @@
       "Sid": "Inspector2ServiceLinkedRole",
       "Effect": "Allow",
       "Action": "iam:CreateServiceLinkedRole",
-      "Resource": [
-        "arn:${PARTITION}:iam::*:role/aws-service-role/inspector2.amazonaws.com/AWSServiceRoleForAmazonInspector2",
-        "arn:${PARTITION}:iam::*:role/aws-service-role/agentless.inspector2.amazonaws.com/AWSServiceRoleForAmazonInspector2Agentless"
-      ],
+      "Resource": "*",
       "Condition": {
         "StringEquals": {
           "iam:AWSServiceName": [
