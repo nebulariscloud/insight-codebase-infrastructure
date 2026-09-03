@@ -1,0 +1,132 @@
+description: |
+  Enable termination protection on a CloudFormation stack.
+
+  Skipped resources:
+    - AWSAccelerator-* stacks (owned by LZA; must not be modified via remediation)
+    - aws-controltower-* stacks (owned by Control Tower)
+    - StackSet-aws-controltower-* stacks (deployed by Control Tower StackSets)
+    - Any nested stack (UpdateTerminationProtection is not supported on nested stacks;
+      it must be set on the root stack only — see CloudFormation API docs)
+    - Any stack that returns AccessDeniedException (org-level SCP deny we
+      cannot enumerate fully). The remediation logs the skip and continues
+      rather than failing the whole rule.
+
+  Implementation note: the API requires StackName (name or ARN). Config passes
+  the stack ID (ARN) as RESOURCE_ID. We accept the ARN directly — the API
+  accepts both name and ARN per the CloudFormation API reference.
+  DescribeStacks is called first to detect nested stacks (ParentId present)
+  before attempting UpdateTerminationProtection.
+
+  Used by Config rule {{ AcceleratorPrefix }}-cloudformation-termination-protection-check.
+schemaVersion: "0.3"
+assumeRole: "{{ AutomationAssumeRole }}"
+parameters:
+  StackId:
+    type: String
+    description: ARN or name of the CloudFormation stack on which to enable termination protection.
+  AutomationAssumeRole:
+    type: String
+    description: ARN of the IAM role SSM Automation assumes to perform the remediation.
+mainSteps:
+  - name: enableTerminationProtection
+    action: "aws:executeScript"
+    inputs:
+      Runtime: python3.11
+      Handler: handler
+      InputPayload:
+        StackId: "{{ StackId }}"
+      Script: |
+        import boto3
+        from botocore.exceptions import ClientError
+
+        # Stack name prefixes owned by systems we must not modify.
+        # AWSAccelerator-* = LZA-managed stacks.
+        # aws-controltower-* = Control Tower direct stacks.
+        # StackSet-aws-controltower-* = Control Tower StackSet-deployed stacks.
+        SKIP_PREFIXES = (
+            "AWSAccelerator-",
+            "aws-controltower-",
+            "StackSet-aws-controltower-",
+        )
+
+        def _stack_name_from_id(stack_id: str) -> str:
+            """
+            Extract the stack name from a stack ARN or return the value as-is
+            if it is already a plain name.
+            ARN format: arn:aws:cloudformation:<region>:<account>:stack/<name>/<uuid>
+            """
+            if stack_id.startswith("arn:"):
+                # e.g. arn:aws:cloudformation:us-east-1:123456789012:stack/MyStack/uuid
+                parts = stack_id.split("/")
+                return parts[1] if len(parts) >= 2 else stack_id
+            return stack_id
+
+        def handler(events, context):
+            stack_id = events['StackId']
+            stack_name = _stack_name_from_id(stack_id)
+
+            # --- 1. Prefix-based skip ---
+            for prefix in SKIP_PREFIXES:
+                if stack_name.startswith(prefix):
+                    return {
+                        "status": "skipped",
+                        "reason": f"prefix:{prefix}",
+                        "stackId": stack_id,
+                    }
+
+            client = boto3.client('cloudformation')
+
+            # --- 2. Nested-stack skip ---
+            # UpdateTerminationProtection cannot be called on a nested stack.
+            # We detect this by checking for the presence of ParentId in the
+            # stack description, which is only set on nested stacks.
+            try:
+                describe_resp = client.describe_stacks(StackName=stack_id)
+                stacks = describe_resp.get('Stacks', [])
+                if not stacks:
+                    return {
+                        "status": "skipped",
+                        "reason": "stack-not-found",
+                        "stackId": stack_id,
+                    }
+                stack = stacks[0]
+                if stack.get('ParentId'):
+                    return {
+                        "status": "skipped",
+                        "reason": "nested-stack",
+                        "stackId": stack_id,
+                        "parentId": stack['ParentId'],
+                    }
+            except ClientError as e:
+                code = e.response.get('Error', {}).get('Code', '')
+                if code in ('AccessDeniedException', 'AccessDenied'):
+                    return {
+                        "status": "skipped",
+                        "reason": "access-denied-by-scp-on-describe",
+                        "stackId": stack_id,
+                        "errorMessage": str(e),
+                    }
+                raise
+
+            # --- 3. Enable termination protection ---
+            try:
+                client.update_termination_protection(
+                    EnableTerminationProtection=True,
+                    StackName=stack_id,
+                )
+            except ClientError as e:
+                code = e.response.get('Error', {}).get('Code', '')
+                if code in ('AccessDeniedException', 'AccessDenied'):
+                    return {
+                        "status": "skipped",
+                        "reason": "access-denied-by-scp-on-update",
+                        "stackId": stack_id,
+                        "errorMessage": str(e),
+                    }
+                raise
+
+            return {
+                "status": "ok",
+                "stackId": stack_id,
+                "stackName": stack_name,
+            }

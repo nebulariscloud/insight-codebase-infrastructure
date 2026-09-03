@@ -114,6 +114,12 @@ centralSecurityServices:
           # name AWS-UpdateCloudWatchLogGroupRetention.
           - name: "{{ AcceleratorPrefix }}-SSM-Set-CloudWatch-Log-Group-Retention"
             template: ssm-documents/set-cloudwatch-log-group-retention.yaml
+          # CloudFormation.3 - Enable termination protection on a CloudFormation stack.
+          # Custom doc because there is no AWS-managed remediation runbook for
+          # CLOUDFORMATION_TERMINATION_PROTECTION_CHECK. Skips AWSAccelerator-*,
+          # aws-controltower-*, StackSet-aws-controltower-*, and nested stacks.
+          - name: "{{ AcceleratorPrefix }}-SSM-Enable-CloudFormation-Termination-Protection"
+            template: ssm-documents/enable-cloudformation-termination-protection.yaml
 
 # AWS KMS Customer Managed Key Configurations
 # Provides per-region CMKs that are not part of LZA's internal encryption set.
@@ -483,6 +489,27 @@ awsConfig:
                 type: String
               - name: RetentionInDays
                 value: "365"
+                type: String
+        # CloudFormation.3 - CloudFormation stacks must have termination protection enabled.
+        # AWSAccelerator-*, aws-controltower-*, StackSet-aws-controltower-* stacks and
+        # nested stacks are skipped at runtime (SSM doc handles the skip logic).
+        # Findings for those stacks are suppressed manually in Security Hub with an audit note.
+        - name: "{{ AcceleratorPrefix }}-cloudformation-termination-protection-check"
+          identifier: CLOUDFORMATION_TERMINATION_PROTECTION_CHECK
+          complianceResourceTypes:
+            - AWS::CloudFormation::Stack
+          tags:
+            - key: Accelerator
+              value: "{{ AcceleratorPrefix }}"
+          remediation:
+            rolePolicyFile: ssm-remediation-roles/cloudformation-termination-protection-remediation-role.json
+            automatic: true
+            targetId: "{{ AcceleratorPrefix }}-SSM-Enable-CloudFormation-Termination-Protection"
+            retryAttemptSeconds: 60
+            maximumAutomaticAttempts: 5
+            parameters:
+              - name: StackId
+                value: RESOURCE_ID
                 type: String
     # Management account deployment, Control Tower cannot deploy these rules in the Management account so we need to do it manually.
     - deploymentTargets:
