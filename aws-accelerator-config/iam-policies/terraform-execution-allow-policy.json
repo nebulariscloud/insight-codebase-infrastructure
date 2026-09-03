@@ -228,6 +228,20 @@
         "inspector2:ListAccountPermissions"
       ],
       "Resource": "*"
+    },
+    {
+      "Sid": "Inspector2ServiceLinkedRole",
+      "Effect": "Allow",
+      "Action": "iam:CreateServiceLinkedRole",
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "iam:AWSServiceName": [
+            "inspector2.amazonaws.com",
+            "agentless.inspector2.amazonaws.com"
+          ]
+        }
+      }
     }
   ]
 }
