@@ -15,6 +15,7 @@ organizationalUnits:
   - name: Workloads/Dev
   - name: Workloads/Test
   - name: Workloads/Prod
+  - name: Workloads/PCI
 quarantineNewAccounts:
   enable: true
   scpPolicyName: "{{ AcceleratorPrefix }}-Quarantine-New-Object"
@@ -31,6 +32,7 @@ declarativePolicies:
         - Workloads/Dev
         - Workloads/Test
         - Workloads/Prod
+        - Workloads/PCI
       accounts:
         - Network
         - SharedServices
@@ -96,6 +98,7 @@ serviceControlPolicies:
         - Workloads/Dev
         - Workloads/Test
         - Workloads/Prod
+        - Workloads/PCI
   - name: "{{ AcceleratorPrefix }}-Core-Sandbox-Guardrails-1"
     description: >
       Restricts unauthorized modifications to networking resources and configurations, and enforces encryption requirements for storage services.
