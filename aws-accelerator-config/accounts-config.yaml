@@ -45,3 +45,15 @@ workloadAccounts:
     description: The Perimeter account
     email: insightgroup-perimeter@nebulariscloud.com
     organizationalUnit: Infrastructure
+  - name: Production
+    description: Production workloads
+    email: insightgroup-production@nebulariscloud.com
+    organizationalUnit: Workloads/Prod
+  - name: Development
+    description: Code and feature development
+    email: insightgroup-development@nebulariscloud.com
+    organizationalUnit: Workloads/Dev
+  - name: PCI
+    description: PCI DSS in-scope workloads (cardholder data environment)
+    email: insightgroup-pci@nebulariscloud.com
+    organizationalUnit: Workloads/PCI
