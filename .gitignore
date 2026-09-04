@@ -31,3 +31,6 @@ terraform.rc
 .idea/
 .vscode/
 *.swp
+
+# LZA deployment artifacts — generated locally, never committed
+aws-accelerator-config.zip
