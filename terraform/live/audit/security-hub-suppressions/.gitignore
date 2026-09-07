@@ -1,0 +1,10 @@
+# This leaf follows the project-wide pattern:
+# - *.tfvars is gitignored at the repo root, so we explicitly un-ignore
+#   terraform.tfvars here so CI has deterministic values.
+!terraform.tfvars
+
+# Standard Terraform local state and cache — never commit these.
+.terraform/
+.terraform.lock.hcl
+terraform.tfstate
+terraform.tfstate.backup
