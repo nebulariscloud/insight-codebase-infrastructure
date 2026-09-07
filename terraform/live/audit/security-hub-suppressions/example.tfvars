@@ -4,4 +4,4 @@
 
 # account_name = "Audit"
 # account_id   = ""   # leave empty to read /accelerator/organization/account-ids/Audit from SSM
-                      # or set explicitly: account_id = "123456789012"
+# or set explicitly: account_id = "123456789012"
