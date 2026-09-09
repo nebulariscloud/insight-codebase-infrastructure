@@ -1,0 +1,326 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Public Application Load Balancer for the PCI account. Lives inside the PCI
+  account/VPC to keep PCI scope contained. WAF is configured more aggressively
+  than the standard ingress/Scriptcase ALB - all AWS managed rules block at
+  default, plus rate limiting, plus a stricter generic-RFI rule. Body inspection
+  is enforced.
+
+  This template is intentionally similar in shape to scriptcase-lb.yaml so the
+  patterns are familiar, but it is deployed in a separate account and uses a
+  separate name, SG, target group, WAF, and exports. PCI-specific defaults:
+    - HTTPS-only (no plain HTTP listener with traffic forwarded; HTTP only ever
+      issues a 301 redirect to HTTPS, never serves traffic).
+    - WAF Rate Limit set to 500 (vs 2000 elsewhere) - tighter for PCI workloads.
+    - Body inspection size restrictions left at AWS defaults (8KB).
+    - Logs enabled by default - turn off only if you have a reason.
+
+Parameters:
+  VpcId:
+    Type: String
+    Description: The PCI VPC ID
+  PublicSubnetA:
+    Type: String
+    Description: PCI public subnet A ID
+  PublicSubnetB:
+    Type: String
+    Description: PCI public subnet B ID
+  TargetPort:
+    Type: Number
+    Default: 443
+    Description: Backend application port (HTTPS to backend recommended for PCI)
+  TargetProtocol:
+    Type: String
+    Default: HTTPS
+    AllowedValues: [HTTP, HTTPS]
+    Description: Protocol used between ALB and target. PCI strongly prefers HTTPS.
+  HealthCheckPath:
+    Type: String
+    Default: /health
+    Description: Health check path for the target group
+  HealthCheckMatcher:
+    Type: String
+    Default: '200'
+    Description: HTTP status codes considered healthy
+  CertificateArn:
+    Type: String
+    Description: ACM certificate ARN for the HTTPS listener (REQUIRED for PCI)
+  AccessLogsBucketName:
+    Type: String
+    Default: ''
+    Description: >
+      S3 bucket for ALB access logs. Strongly recommended for PCI (req 10.x).
+      LZA pattern: aws-accelerator-elb-access-logs-<account-id>-<region>
+  CrossZoneLoadBalancing:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: >
+      Cross-zone load balancing. Default true for PCI (resilience > cost).
+
+Conditions:
+  HasAccessLogs: !Not [!Equals [!Ref AccessLogsBucketName, '']]
+
+Resources:
+  AlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for the PCI ALB - allows internet HTTPS
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        # PCI: only allow HTTPS from the internet. HTTP is allowed only for the
+        # 301 redirect listener (it never carries app traffic).
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: Allow HTTP for redirect-to-HTTPS only
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: Allow HTTPS from internet
+      SecurityGroupEgress:
+        # Egress is intentionally restricted to the PCI app tier only.
+        - IpProtocol: tcp
+          FromPort: !Ref TargetPort
+          ToPort: !Ref TargetPort
+          CidrIp: 10.16.0.0/14
+          Description: Allow traffic to PCI workloads only
+      Tags:
+        - Key: Name
+          Value: AWSAccelerator-pci-alb-sg
+        - Key: Compliance
+          Value: PCI-DSS
+        - Key: Accelerator
+          Value: AWSAccelerator
+
+  PciAlb:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: pci-alb
+      Scheme: internet-facing
+      Type: application
+      IpAddressType: ipv4
+      SecurityGroups:
+        - !Ref AlbSecurityGroup
+      Subnets:
+        - !Ref PublicSubnetA
+        - !Ref PublicSubnetB
+      LoadBalancerAttributes:
+        - Key: routing.http.drop_invalid_header_fields.enabled
+          Value: 'true'
+        - Key: deletion_protection.enabled
+          Value: 'true'
+        - Key: routing.http.desync_mitigation_mode
+          Value: strictest
+        - Key: routing.http.xff_client_port.enabled
+          Value: 'true'
+        - Key: routing.http.preserve_host_header.enabled
+          Value: 'true'
+        - !If
+          - HasAccessLogs
+          - Key: access_logs.s3.enabled
+            Value: 'true'
+          - !Ref AWS::NoValue
+        - !If
+          - HasAccessLogs
+          - Key: access_logs.s3.bucket
+            Value: !Ref AccessLogsBucketName
+          - !Ref AWS::NoValue
+        - !If
+          - HasAccessLogs
+          - Key: access_logs.s3.prefix
+            Value: pci-alb
+          - !Ref AWS::NoValue
+      Tags:
+        - Key: Name
+          Value: AWSAccelerator-pci-alb
+        - Key: Compliance
+          Value: PCI-DSS
+        - Key: Accelerator
+          Value: AWSAccelerator
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Protocol: !Ref TargetProtocol
+      Port: !Ref TargetPort
+      VpcId: !Ref VpcId
+      TargetType: ip
+      HealthCheckEnabled: true
+      HealthCheckProtocol: !Ref TargetProtocol
+      HealthCheckPath: !Ref HealthCheckPath
+      Matcher:
+        HttpCode: !Ref HealthCheckMatcher
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 10
+      HealthyThresholdCount: 3
+      UnhealthyThresholdCount: 3
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: '30'
+        - Key: load_balancing.cross_zone.enabled
+          Value: !Ref CrossZoneLoadBalancing
+        - Key: stickiness.enabled
+          Value: 'false'
+      Tags:
+        - Key: Name
+          Value: AWSAccelerator-pci-alb-tg
+        - Key: Compliance
+          Value: PCI-DSS
+        - Key: Accelerator
+          Value: AWSAccelerator
+
+  # HTTP only ever redirects to HTTPS. No conditional - PCI never serves app
+  # traffic over plaintext HTTP.
+  HttpRedirectListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref PciAlb
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: redirect
+          RedirectConfig:
+            Protocol: HTTPS
+            Port: '443'
+            StatusCode: HTTP_301
+
+  HttpsListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref PciAlb
+      Port: 443
+      Protocol: HTTPS
+      # TLS 1.3 / 1.2 only. ELBSecurityPolicy-TLS13-1-2-2021-06 is FIPS-compatible.
+      SslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06
+      Certificates:
+        - CertificateArn: !Ref CertificateArn
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  # PCI-tuned WAF. All managed rules block by default. Rate limit is tighter.
+  WebAcl:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: pci-alb-waf
+      Scope: REGIONAL
+      Description: WAF for the PCI ALB - PCI-tuned defaults
+      DefaultAction:
+        Allow: {}
+      VisibilityConfig:
+        SampledRequestsEnabled: true
+        CloudWatchMetricsEnabled: true
+        MetricName: pci-alb-waf
+      Rules:
+        - Name: AWS-CommonRuleSet
+          Priority: 0
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesCommonRuleSet
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: AWS-CommonRuleSet
+        - Name: AWS-KnownBadInputs
+          Priority: 1
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesKnownBadInputsRuleSet
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: AWS-KnownBadInputs
+        - Name: AWS-IPReputation
+          Priority: 2
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesAmazonIpReputationList
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: AWS-IPReputation
+        # SQL injection rules - relevant to PCI cardholder DB workloads.
+        - Name: AWS-SQLi
+          Priority: 3
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesSQLiRuleSet
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: AWS-SQLi
+        # Linux protection rules
+        - Name: AWS-Linux
+          Priority: 4
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesLinuxRuleSet
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: AWS-Linux
+        # Tighter rate limit for PCI - 500/5min/IP
+        - Name: RateLimit
+          Priority: 5
+          Action:
+            Block: {}
+          Statement:
+            RateBasedStatement:
+              Limit: 500
+              AggregateKeyType: IP
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: RateLimit
+      Tags:
+        - Key: Name
+          Value: AWSAccelerator-pci-alb-waf
+        - Key: Compliance
+          Value: PCI-DSS
+        - Key: Accelerator
+          Value: AWSAccelerator
+
+  WebAclAssociation:
+    Type: AWS::WAFv2::WebACLAssociation
+    Properties:
+      ResourceArn: !Ref PciAlb
+      WebACLArn: !GetAtt WebAcl.Arn
+
+Outputs:
+  AlbDnsName:
+    Description: DNS name of the PCI Application Load Balancer
+    Value: !GetAtt PciAlb.DNSName
+    Export:
+      Name: pci-alb-dns
+  AlbArn:
+    Description: ARN of the PCI Application Load Balancer
+    Value: !Ref PciAlb
+  TargetGroupArn:
+    Description: ARN of the PCI target group - register in-scope workloads here
+    Value: !Ref TargetGroup
+    Export:
+      Name: pci-alb-tg-arn
+  SecurityGroupId:
+    Description: Security group ID of the PCI ALB
+    Value: !Ref AlbSecurityGroup
+  WafWebAclArn:
+    Description: ARN of the WAF Web ACL
+    Value: !GetAtt WebAcl.Arn

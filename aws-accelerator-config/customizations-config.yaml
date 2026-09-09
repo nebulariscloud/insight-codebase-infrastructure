@@ -1,0 +1,237 @@
+####################################################################################################################
+# customizations-config.yaml                                                                                       #
+# Deploys custom CloudFormation stacks via the LZA pipeline.                                                       #
+# Resources are deployed using the accelerator execution role, bypassing SCPs.                                     #
+####################################################################################################################
+
+customizations:
+  cloudFormationStacks:
+    # Ingress ALB - deployed to the Perimeter account
+    # Production-hardened: WAF enabled, access logs to LZA elb-logs bucket, deletion protection
+    - deploymentTargets:
+        accounts:
+          - Perimeter
+      name: IngressALB
+      description: Internet-facing ALB in the ingress VPC with WAF and access logs
+      template: custom-stacks/ingress-alb.yaml
+      runOrder: 1
+      terminationProtection: false
+      regions:
+        - "{{ HomeRegion }}"
+      parameters:
+        # Hardcoded VPC and subnet IDs from the Perimeter account ingress VPC.
+        # Verified via: aws ssm get-parameter --name /accelerator/network/vpc/...
+        - name: VpcId
+          value: vpc-0f8cbc901a195b148
+        - name: PublicSubnetA
+          value: subnet-0e4b51e5c27c3ffbf
+        - name: PublicSubnetB
+          value: subnet-079c23a68151cc828
+        - name: TargetPort
+          value: '443'
+        - name: TargetProtocol
+          value: HTTPS
+        - name: HealthCheckPath
+          value: /
+        - name: HealthCheckMatcher
+          value: '200,302,401'
+        # WAF: AWS managed rules + rate limiting + IP reputation
+        # Cost: ~$5/month + ~$1/managed rule + $0.60/M requests
+        - name: EnableWaf
+          value: 'true'
+        # Cross-zone LB: 'false' reduces cross-AZ data transfer cost (recommended
+        # since targets are in another VPC via TGW). Set 'true' for higher availability.
+        - name: CrossZoneLoadBalancing
+          value: 'false'
+        # Access logs: requires the LZA elb-access-logs bucket in the Perimeter account.
+        # Currently disabled - bucket doesn't exist in this account.
+        # To enable: verify bucket exists, then set the value below.
+        - name: AccessLogsBucketName
+          value: ''
+        # HTTPS: ACM cert for wazuh.insightgrouppr.com
+        - name: CertificateArn
+          value: arn:aws:acm:us-east-2:713939170920:certificate/5067a266-b377-4cef-ab7c-23faa64d2616
+
+    # Scriptcase ALB - dedicated load balancer for the migrated Scriptcase server.
+    # Same hardening profile as IngressALB (WAF, deletion protection, optional access logs).
+    # Uses different resource names/exports so it coexists with the primary ingress ALB.
+    - deploymentTargets:
+        accounts:
+          - Perimeter
+      name: ScriptcaseLB
+      description: Internet-facing ALB dedicated to the Scriptcase application
+      template: custom-stacks/scriptcase-lb.yaml
+      runOrder: 1
+      terminationProtection: false
+      regions:
+        - "{{ HomeRegion }}"
+      parameters:
+        - name: VpcId
+          value: vpc-0f8cbc901a195b148
+        - name: PublicSubnetA
+          value: subnet-0e4b51e5c27c3ffbf
+        - name: PublicSubnetB
+          value: subnet-079c23a68151cc828
+        # Scriptcase's bundled Apache (v9-php73, Apache 2.4.39 + OpenSSL) serves
+        # 8091 as **SSL-only**. Verified on the instance 2026-07-30: plain HTTP
+        # to :8091 returns `400 Bad Request - You're speaking plain HTTP to an
+        # SSL-enabled server port`, while HTTPS returns 302. So the backend hop
+        # has to be HTTPS/8091, not HTTP/80.
+        #
+        # !! APPLYING A CHANGE TO EITHER VALUE BELOW REPLACES THE TARGET GROUP !!
+        # Target group Port *and* Protocol are both immutable, so CloudFormation
+        # replaces the TG rather than updating it. The replacement comes up with
+        # zero registered targets and the site 503s until someone runs:
+        #   aws elbv2 register-targets --region us-east-2 \
+        #     --target-group-arn <new-arn> \
+        #     --targets Id=10.12.1.78,Port=8091,AvailabilityZone=us-east-2a
+        # (AvailabilityZone is mandatory - cross-zone LB is disabled and the
+        # target lives in another VPC.) Schedule a window before running the
+        # pipeline with these values changed.
+        #
+        # ALB does not validate the backend certificate on HTTPS target groups,
+        # so the instance's expiring Let's Encrypt cert does not affect this hop.
+        - name: TargetPort
+          value: '8091'
+        - name: TargetProtocol
+          value: HTTPS
+        - name: HealthCheckPath
+          value: /
+        - name: HealthCheckMatcher
+          value: '200,302'
+        - name: EnableWaf
+          value: 'true'
+        - name: CrossZoneLoadBalancing
+          value: 'false'
+        - name: AccessLogsBucketName
+          value: ''
+        # ACM cert for Scriptcase. Empty = HTTP-only listener on :80 (no HTTPS).
+        # Provision a cert in ACM (us-east-2) for the Scriptcase hostname,
+        # then drop the ARN here. Until then HTTPS is disabled and the
+        # HttpsListener resource won't be created.
+        - name: CertificateArn
+          value: arn:aws:acm:us-east-2:713939170920:certificate/0aecdaf1-2d06-4c29-9d50-605ef8bc6ea9
+
+    # Scriptcase Global Accelerator - provides two static anycast IPs in front
+    # of the Scriptcase ALB so a vendor can allowlist a stable IP set. The ALB
+    # itself is unchanged; GA only adds static-IP ingress.
+    #
+    # NOTE: deployed in us-west-2 because AWS Global Accelerator's CloudFormation
+    # control plane only lives there. The accelerator is global and routes to
+    # the Scriptcase ALB in us-east-2.
+    #
+    # After the stack creates, fetch the two static IPs to share with the vendor:
+    #   aws cloudformation describe-stacks --region us-west-2 \
+    #     --query 'Stacks[?contains(StackName,`ScriptcaseGA`)].Outputs[?OutputKey==`AcceleratorIps`].OutputValue' \
+    #     --output text
+    - deploymentTargets:
+        accounts:
+          - Perimeter
+      name: ScriptcaseGA
+      description: Global Accelerator providing static IPs for the Scriptcase ALB
+      template: custom-stacks/scriptcase-ga.yaml
+      runOrder: 2
+      terminationProtection: false
+      regions:
+        - us-west-2
+      parameters:
+        - name: AlbArn
+          value: arn:aws:elasticloadbalancing:us-east-2:713939170920:loadbalancer/app/scriptcase-lb/1e9fb498cb0ab723
+        - name: AlbRegion
+          value: us-east-2
+        - name: HealthCheckPort
+          value: '80'
+        - name: ClientIpPreservation
+          value: 'true'
+
+    # PCI public ALB - deployed inside the PCI account itself, NOT Perimeter.
+    # Reason: PCI scope follows cardholder data flow. Putting the LB in Perimeter
+    # would drag every other Perimeter-hosted workload into PCI scope. The PCI
+    # account contains its own VPC, ALB, WAF, and workloads - one auditable
+    # boundary.
+    #
+    # Pre-reqs (uncomment in this order, after the AWS Org account quota lands):
+    #   1. PCI account exists (uncomment in accounts-config.yaml + run pipeline)
+    #   2. PCI VPC exists (uncomment the pci VPC + IPAM pool + tgw-rt-pci in
+    #      network-config.yaml + replacements-config.yaml + run pipeline)
+    #   3. ACM cert provisioned in the PCI account / us-east-2 for the PCI app
+    #      hostname. Replace CertificateArn below with that ARN.
+    #   4. PCI public subnet IDs known. Replace PublicSubnetA/B below.
+    #   5. Then uncomment this block + run pipeline.
+    #
+    # - deploymentTargets:
+    #     accounts:
+    #       - PCI
+    #   name: PciAlb
+    #   description: Public ALB for PCI workloads (in-scope, contained inside the PCI account)
+    #   template: custom-stacks/pci-alb.yaml
+    #   runOrder: 1
+    #   terminationProtection: false
+    #   regions:
+    #     - "{{ HomeRegion }}"
+    #   parameters:
+    #     - name: VpcId
+    #       value: <PCI VPC id, fetch with describe-vpcs after the VPC is created>
+    #     - name: PublicSubnetA
+    #       value: <PCI pci-public-a subnet id>
+    #     - name: PublicSubnetB
+    #       value: <PCI pci-public-b subnet id>
+    #     - name: TargetPort
+    #       value: '443'
+    #     - name: TargetProtocol
+    #       value: HTTPS
+    #     - name: HealthCheckPath
+    #       value: /health
+    #     - name: HealthCheckMatcher
+    #       value: '200'
+    #     - name: CrossZoneLoadBalancing
+    #       value: 'true'
+    #     - name: AccessLogsBucketName
+    #       value: aws-accelerator-elb-access-logs-<pci-account-id>-<region>
+    #     - name: CertificateArn
+    #       value: <ACM cert ARN in PCI account / us-east-2>
+
+    # ----------------------------------------------------------------------------
+    # Migrated EC2 servers (lift-and-shift from another tenant via copied AMIs)
+    # Template: custom-stacks/migrated-ec2.yaml
+    #
+    # Recommended workflow:
+    #   1. Deploy standalone first via `aws cloudformation deploy` to iterate fast
+    #      during cutover. The template is identical.
+    #   2. Once the server is stable, uncomment the matching block below and let
+    #      the LZA pipeline take ownership.
+    #
+    # Example (Alfresco) - uncomment, fill in IDs, and add accounts entry:
+    # - deploymentTargets:
+    #     accounts:
+    #       - SharedProd        # name of spoke account in accounts-config.yaml
+    #   name: AlfrescoServer
+    #   description: Migrated Alfresco server (was ami-0ed2912346853f6ed in source tenant)
+    #   template: custom-stacks/migrated-ec2.yaml
+    #   runOrder: 10
+    #   terminationProtection: false
+    #   regions:
+    #     - "{{ HomeRegion }}"
+    #   parameters:
+    #     - name: ServerName
+    #       value: alfresco-prod
+    #     - name: AmiId
+    #       value: ami-0eef1ec163e0fc571        # us-east-2 copy
+    #     - name: InstanceType
+    #       value: m5.large
+    #     - name: SubnetId
+    #       value: subnet-XXXXXXXX
+    #     - name: SecurityGroupIds
+    #       value: sg-XXXXXXXX
+    #     - name: KeyName
+    #       value: shared-prod-key
+    #     - name: PrivateIp
+    #       value: ''                            # leave blank unless pinning is required
+    #     - name: IamInstanceProfileName
+    #       value: ''                            # e.g. AWSAccelerator-Default-EC2Profile
+    #     - name: AllocateEip
+    #       value: 'false'
+    #     - name: Route53HostedZoneId
+    #       value: ''
+    #     - name: Route53RecordName
+    #       value: ''

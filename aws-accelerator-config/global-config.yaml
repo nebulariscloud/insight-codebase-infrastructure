@@ -59,6 +59,7 @@ controlTower:
           - Workloads/Dev
           - Workloads/Test
           - Workloads/Prod
+          - Workloads/PCI
     # # CONFIG.LOGS.DT.1
     # #   - Checks if Amazon CloudWatch Log Groups are encrypted with any AWS KMS key or a specified AWS KMS key Id
     - identifier: 497wrm2xnk1wxlf4obrdo7mej
@@ -72,6 +73,7 @@ controlTower:
           - Workloads/Dev
           - Workloads/Test
           - Workloads/Prod
+          - Workloads/PCI
     # # CONFIG.IAM.DT.6
     # #   - Checks whether IAM groups have at least one IAM user
     - identifier: 3jw8po9x95lr2nob65iaqhqir
@@ -85,6 +87,7 @@ controlTower:
           - Workloads/Dev
           - Workloads/Test
           - Workloads/Prod
+          - Workloads/PCI
     # # CONFIG.IAM.DT.5
     # #   - Checks if the inline policy feature is not in use
     - identifier: bi738zni6ovf9d6dagobqtk6g
@@ -98,6 +101,7 @@ controlTower:
           - Workloads/Dev
           - Workloads/Test
           - Workloads/Prod
+          - Workloads/PCI
     # # CONFIG.EC2.DT.17
     # #.  - Checks if internet gateways are attached to an authorized virtual private cloud (Amazon VPC)
     - identifier: 1d908j9c0qtyr5vq7mora1ht2
@@ -111,6 +115,7 @@ controlTower:
           - Workloads/Dev
           - Workloads/Test
           - Workloads/Prod
+          - Workloads/PCI
     # # AWS-GR_NO_UNRESTRICTED_ROUTE_TO_IGW
     # #   - Detect whether public routes exist in the route table for an Internet Gateway (IGW)
     - identifier: b8pjfqosgkgknznstduvel4rh
@@ -124,6 +129,7 @@ controlTower:
           - Workloads/Dev
           - Workloads/Test
           - Workloads/Prod
+          - Workloads/PCI
     # # CONFIG.SAGEMAKER.DT.3
     # #   - Checks if an AWS Key Management Service (AWS KMS) key is configured for an Amazon SageMaker notebook instance
     - identifier: 3b7ib9mi87kcw90atgx2nboax
@@ -137,6 +143,7 @@ controlTower:
           - Workloads/Dev
           - Workloads/Test
           - Workloads/Prod
+          - Workloads/PCI
     # # CONFIG.SECURITYHUB.DT.1
     # #   - Checks if AWS Security Hub is enabled for an AWS Account
     - identifier: 1klk5z4sby5l0cfx65dmq2dsk
@@ -150,6 +157,7 @@ controlTower:
           - Workloads/Dev
           - Workloads/Test
           - Workloads/Prod
+          - Workloads/PCI
     # # BACKUP_PLAN_MIN_FREQUENCY_AND_MIN_RETENTION_CHECK
     # #   - Checks if a backup plan has a backup rule that satisfies the required frequency and retention period
     - identifier: dagreqi0i3fitenunuuo4q64t
@@ -163,6 +171,7 @@ controlTower:
           - Workloads/Dev
           - Workloads/Test
           - Workloads/Prod
+          - Workloads/PCI
     # # BACKUP_RECOVERY_POINT_MANUAL_DELETION_DISABLED
     # #   - Checks if a backup vault has an attached resource-based policy which prevents deletion of recovery points
     - identifier: d1wltz1jx8c4aok5062g4kzz3
@@ -176,6 +185,7 @@ controlTower:
           - Workloads/Dev
           - Workloads/Test
           - Workloads/Prod
+          - Workloads/PCI
     # # CONFIG.EC2.DT.10
     # #   - Checks if Amazon Elastic Compute Cloud (Amazon EC2) instances are protected by a backup plan
     - identifier: aqh482zxh1libhd8e5pff5r1w
@@ -189,6 +199,7 @@ controlTower:
           - Workloads/Dev
           - Workloads/Test
           - Workloads/Prod
+          - Workloads/PCI
 
 # AWS IAM Central Root Management
 centralRootUserManagement:
@@ -223,6 +234,7 @@ backup:
           - Workloads/Dev
           - Workloads/Test
           - Workloads/Prod
+          - Workloads/PCI
 
 # Logging Configurations
 logging:
