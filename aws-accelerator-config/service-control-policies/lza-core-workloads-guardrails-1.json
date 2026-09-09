@@ -27,8 +27,6 @@
       "Action": [
         "ec2:AcceptTransitGateway*",
         "ec2:AcceptVpc*",
-        "ec2:AllocateAddress",
-        "ec2:AssociateAddress",
         "ec2:AttachInternetGateway",
         "ec2:AttachVpnGateway",
         "ec2:CreateEgressOnlyInternetGateway",
@@ -59,6 +57,46 @@
             "arn:${PARTITION}:iam::*:role/${MANAGEMENT_ACCOUNT_ACCESS_ROLE}",
             "arn:${PARTITION}:iam::*:role/cdk-accel*"
           ]
+        }
+      }
+    },
+    {
+      "Sid": "GRNETSEC2EIPAllocate",
+      "Effect": "Deny",
+      "Action": [
+        "ec2:AllocateAddress"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "ArnNotLike": {
+          "aws:PrincipalARN": [
+            "arn:${PARTITION}:iam::*:role/${ACCELERATOR_PREFIX}*",
+            "arn:${PARTITION}:iam::*:role/${MANAGEMENT_ACCOUNT_ACCESS_ROLE}",
+            "arn:${PARTITION}:iam::*:role/cdk-accel*"
+          ]
+        },
+        "StringNotEquals": {
+          "aws:RequestTag/Migrated": "CTIv7"
+        }
+      }
+    },
+    {
+      "Sid": "GRNETSEC2EIPAssociate",
+      "Effect": "Deny",
+      "Action": [
+        "ec2:AssociateAddress"
+      ],
+      "Resource": "arn:${PARTITION}:ec2:*:*:elastic-ip/*",
+      "Condition": {
+        "ArnNotLike": {
+          "aws:PrincipalARN": [
+            "arn:${PARTITION}:iam::*:role/${ACCELERATOR_PREFIX}*",
+            "arn:${PARTITION}:iam::*:role/${MANAGEMENT_ACCOUNT_ACCESS_ROLE}",
+            "arn:${PARTITION}:iam::*:role/cdk-accel*"
+          ]
+        },
+        "StringNotEquals": {
+          "aws:ResourceTag/Migrated": "CTIv7"
         }
       }
     },

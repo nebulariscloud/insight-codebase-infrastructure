@@ -105,6 +105,26 @@ globalReplacements:
     type: String
     value: "10.12.0.0/14"
 
+  ## PCI VPCs Pool - dedicated, segregated from Dev/Test/Prod for PCI scope isolation.
+  ## Uses 10.16.0.0/14 which sits OUTSIDE the existing regional pool (10.0.0.0/12).
+  ## In network-config.yaml the IPAM pool for PCI sources from the GLOBAL pool
+  ## (10.0.0.0/8), not from the regional pool, since it doesn't fit inside /12.
+  - key: HomeRegionPciWorkloadsCidr
+    type: String
+    value: "10.16.0.0/14"
+  - key: HomeRegionPciVpcMaskLength
+    type: Number
+    value: 20
+  - key: HomeRegionPciPublicSubnetMaskLength
+    type: Number
+    value: 24
+  - key: HomeRegionPciAppSubnetMaskLength
+    type: Number
+    value: 24
+  - key: HomeRegionPciDataSubnetMaskLength
+    type: Number
+    value: 26
+
   #############################################
   # HUB & SPOKE VPC DEPLOYMENT MODEL ONLY!!!! #
   #############################################
