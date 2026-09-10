@@ -345,22 +345,11 @@ centralNetworkServices:
             accounts:
               - Network
 
-        # PCI IPAM pool - sources from the GLOBAL pool (10.0.0.0/8) because
-        # 10.16.0.0/14 sits outside the existing regional 10.0.0.0/12.
-        # Shared directly to the PCI account (no shared-VPC pattern - PCI gets its
-        # own VPC inside its own account for scope isolation).
-        - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-ipam-pci-pool"
-          description: IP pool allocation for the PCI LZA account
-          locale: "{{ HomeRegion }}"
-          provisionedCidrs:
-            - "{{ HomeRegionPciWorkloadsCidr }}"
-          sourceIpamPool: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-ipam-global-pool"
-          tags:
-            - key: Accelerator
-              value: "{{ AcceleratorPrefix }}"
-          shareTargets:
-            accounts:
-              - PCI
+        # PCI IPAM pool - PARKED 2026-09-09, see note on the PCI VPC below.
+        # Do not re-add without first resolving the orphaned pool
+        # ipam-pool-0c7915ab1417b6695 (CIDR 10.16.0.0/14 is in
+        # 'failed-deprovision'), or NetworkPrepStack fails again with
+        # "Pool with identical attributes already created".
 
   # NO Network Firewall - removed to save ~$570/month
 
@@ -1189,162 +1178,51 @@ vpcs:
         - service: dynamodb
     useCentralEndpoints: true
 
-  # PCI VPC
-  #  - Deploys directly into the PCI account (NOT shared from Network) to keep PCI scope
-  #    contained inside one auditable account boundary.
-  #  - Three subnet tiers per AZ: public (for the PCI ALB), app (for cardholder data
-  #    workloads), data (for databases - no internet route at all).
-  #  - Attaches to the dedicated tgw-rt-pci route table so PCI cannot reach Dev/Test/Prod
-  #    spokes and they cannot reach PCI. Only egress via the Perimeter egress VPC is allowed.
-  - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci"
-    account: PCI
-    region: "{{ HomeRegion }}"
-    ipamAllocations:
-      - ipamPoolName: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-ipam-pci-pool"
-        netmaskLength: {{ HomeRegionPciVpcMaskLength }}
-    defaultSecurityGroupRulesDeletion: true
-    internetGateway: true
-    enableDnsHostnames: true
-    enableDnsSupport: true
-    instanceTenancy: default
-    routeTables:
-      - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci-rt-public-a"
-        routes:
-          - name: TgwRoute
-            destination: "{{ GlobalCidr }}"
-            type: transitGateway
-            target: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-tgw"
-          - name: Internet
-            destination: 0.0.0.0/0
-            type: internetGateway
-      - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci-rt-public-b"
-        routes:
-          - name: TgwRoute
-            destination: "{{ GlobalCidr }}"
-            type: transitGateway
-            target: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-tgw"
-          - name: Internet
-            destination: 0.0.0.0/0
-            type: internetGateway
-      - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci-rt-app-a"
-        routes:
-          - name: TgwRoute
-            destination: 0.0.0.0/0
-            type: transitGateway
-            target: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-tgw"
-          - name: S3Gateway
-            type: gatewayEndpoint
-            target: s3
-          - name: DynamoDBGateway
-            type: gatewayEndpoint
-            target: dynamodb
-      - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci-rt-app-b"
-        routes:
-          - name: TgwRoute
-            destination: 0.0.0.0/0
-            type: transitGateway
-            target: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-tgw"
-          - name: S3Gateway
-            type: gatewayEndpoint
-            target: s3
-          - name: DynamoDBGateway
-            type: gatewayEndpoint
-            target: dynamodb
-      # Data subnets have NO internet route. Data leaves only via VPC endpoints
-      # or via TGW to other in-scope accounts (none, currently).
-      - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci-rt-data-a"
-        routes:
-          - name: S3Gateway
-            type: gatewayEndpoint
-            target: s3
-          - name: DynamoDBGateway
-            type: gatewayEndpoint
-            target: dynamodb
-      - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci-rt-data-b"
-        routes:
-          - name: S3Gateway
-            type: gatewayEndpoint
-            target: s3
-          - name: DynamoDBGateway
-            type: gatewayEndpoint
-            target: dynamodb
-      - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci-rt-tgw-a"
-        routes: []
-      - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci-rt-tgw-b"
-        routes: []
-    subnets:
-      - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci-public-a"
-        availabilityZone: a
-        routeTable: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci-rt-public-a"
-        ipamAllocation:
-          ipamPoolName: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-ipam-pci-pool"
-          netmaskLength: {{ HomeRegionPciPublicSubnetMaskLength }}
-      - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci-public-b"
-        availabilityZone: b
-        routeTable: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci-rt-public-b"
-        ipamAllocation:
-          ipamPoolName: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-ipam-pci-pool"
-          netmaskLength: {{ HomeRegionPciPublicSubnetMaskLength }}
-      - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci-app-a"
-        availabilityZone: a
-        routeTable: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci-rt-app-a"
-        ipamAllocation:
-          ipamPoolName: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-ipam-pci-pool"
-          netmaskLength: {{ HomeRegionPciAppSubnetMaskLength }}
-      - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci-app-b"
-        availabilityZone: b
-        routeTable: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci-rt-app-b"
-        ipamAllocation:
-          ipamPoolName: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-ipam-pci-pool"
-          netmaskLength: {{ HomeRegionPciAppSubnetMaskLength }}
-      - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci-data-a"
-        availabilityZone: a
-        routeTable: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci-rt-data-a"
-        ipamAllocation:
-          ipamPoolName: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-ipam-pci-pool"
-          netmaskLength: {{ HomeRegionPciDataSubnetMaskLength }}
-      - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci-data-b"
-        availabilityZone: b
-        routeTable: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci-rt-data-b"
-        ipamAllocation:
-          ipamPoolName: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-ipam-pci-pool"
-          netmaskLength: {{ HomeRegionPciDataSubnetMaskLength }}
-      - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci-tgw-a"
-        availabilityZone: a
-        routeTable: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci-rt-tgw-a"
-        ipamAllocation:
-          ipamPoolName: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-ipam-pci-pool"
-          netmaskLength: 28
-        tags:
-          - key: SubnetType
-            value: "{{ AcceleratorPrefix }}-Tgw"
-      - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci-tgw-b"
-        availabilityZone: b
-        routeTable: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci-rt-tgw-b"
-        ipamAllocation:
-          ipamPoolName: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-ipam-pci-pool"
-          netmaskLength: 28
-        tags:
-          - key: SubnetType
-            value: "{{ AcceleratorPrefix }}-Tgw"
-    transitGatewayAttachments:
-      - name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci"
-        transitGateway:
-          name: "{{ AcceleratorPrefix }}-{{ HomeRegion }}-tgw"
-          account: Network
-        routeTableAssociations:
-          - "{{ AcceleratorPrefix }}-{{ HomeRegion }}-tgw-rt-pci"
-        routeTablePropagations:
-          - "{{ AcceleratorPrefix }}-{{ HomeRegion }}-tgw-rt-firewall"
-        subnets:
-          - "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci-tgw-a"
-          - "{{ AcceleratorPrefix }}-{{ HomeRegion }}-pci-tgw-b"
-    gatewayEndpoints:
-      defaultPolicy: Endpoint-Default
-      endpoints:
-        - service: s3
-        - service: dynamodb
-    useCentralEndpoints: true
+  # PCI VPC - PARKED 2026-09-09. NOT DELETED. STILL LIVE IN AWS.
+  #
+  # WHY: the 2026-09-04 config-zip incident left the PCI IPAM pool
+  # (ipam-pool-0c7915ab1417b6695) orphaned - physically present but no longer a
+  # resource in NetworkPrepStack, with its 10.16.0.0/14 CIDR stuck in
+  # 'failed-deprovision' because the allocation to this VPC was still live.
+  # Re-adding the pool therefore fails:
+  #     CREATE_FAILED AWS::EC2::IPAMPool
+  #     "Pool with identical attributes already created" (AlreadyExists)
+  # That failure rolls back NetworkPrepStack, which stops the pipeline before
+  # the network-vpc stage - which is what left shared-prod's public-a subnet
+  # and all five shared-prod RAM subnet shares missing, so Production could not
+  # create anything in shared-prod. Parking PCI is what unblocks that.
+  #
+  # WHAT IS STILL DEPLOYED AND UNTOUCHED (verified 2026-09-09):
+  #   VPC        vpc-0766c6bceb81ea3fa  10.16.0.0/20  available
+  #   subnets    8  (public a/b, app a/b, data a/b, tgw a/b)
+  #   ENIs       2
+  #   stack      AWSAccelerator-VpcStack-AWSAccelerator-us-east-2-pci-247514667218-us-east-2
+  #              UPDATE_COMPLETE, last updated 2026-09-02, i.e. pre-incident
+  #
+  # Removing a VPC from network-config does NOT delete it. LZA stops
+  # synthesising that VPC's stack; it does not emit a delete. Evidenced by
+  # 2026-09-04, when this config contained no PCI VPC, the network-vpc stage
+  # ran, and VpcStack-...-pci was never touched.
+  #
+  # TO UNPARK - do these IN ORDER, do not just uncomment:
+  #   1. Resolve the orphaned pool. Options, best first:
+  #        a. AWS support clears the 'failed-deprovision' state server-side.
+  #        b. CloudFormation IMPORT the existing pool into
+  #           AWSAccelerator-NetworkPrepStack-857876979853-us-east-2 with the
+  #           matching logical ID, using a management-account role (the SCP
+  #           lza-infrastructure-guardrails-1 exempts only AWSAccelerator*,
+  #           the management account access role, and cdk-accel*).
+  #        c. Delete and rebuild the PCI VPC. Destructive - last resort.
+  #      Deprovisioning or releasing the allocation yourself will NOT work:
+  #      ReleaseIpamPoolAllocation only handles manual allocations, not
+  #      resource-backed ones, and the VPC must keep existing. This is a
+  #      dependency problem, not a permissions problem.
+  #   2. Restore this block and the ipam-pci-pool block above, verbatim from
+  #      git history (commit 4a3e53b, PR #94).
+  #   3. Expect an UPDATE to VpcStack-...-pci, not a CREATE. If a plan shows the
+  #      VPC or its subnets being replaced, STOP - the logical IDs have drifted.
+  #
+  # Full context: .kiro/journal/2026-09-09-lza-config-untracked-zip-upload-stripped-config.md
 
 # VPC Flow Logs
 #   - Logs sent to CloudWatch Logs which are then forwarded to the log account's central logging bucket
