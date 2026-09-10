@@ -234,7 +234,54 @@ backup:
           - Workloads/Dev
           - Workloads/Test
           - Workloads/Prod
-          - Workloads/PCI
+          # - Workloads/PCI
+          #
+          # PARKED 2026-09-10. The vault is NOT deleted - it is live in PCI and
+          # still encrypted. LZA simply stops trying to create one that exists.
+          #
+          # WHY: AWSAccelerator-BackupVault already exists in PCI (247514667218),
+          # created 2026-05-27, encrypted with
+          # arn:aws:kms:us-east-2:247514667218:key/414021af-462d-49b4-bd7a-af932041031f
+          # but it is NOT a resource in AWSAccelerator-OperationsStack. So the
+          # stack tried to CREATE the vault and its BackupKey, and CloudFormation
+          # rejected the update before touching any resource:
+          #
+          #   UPDATE_FAILED  AWS::CloudFormation::Stack
+          #   "Validation failed with 1 error(s). Call DescribeEvents to retrieve
+          #    the full list of issues with resource and property details, resolve
+          #    each error, then retry the operation."
+          #
+          # Confirmed by elimination: on 2026-09-10 the ONLY diff in PCI
+          # us-east-1 and us-west-2 was "+ ${BackupKey.Arn} Allow kms:*" and both
+          # failed identically, while every other account succeeded. It is also
+          # why this stack has failed since 2026-05-29 - the vault was created
+          # 05-27, that update rolled back, and every attempt since has retried
+          # the create. Same class of fault as the orphaned PCI IPAM pool (#95).
+          #
+          # IMPACT: no practical loss of backup coverage. The vault still exists
+          # and is still the target of the org-level backupPolicies in
+          # organization-config.yaml, which are AWS Organizations policies and
+          # independent of this resource block. What is lost is LZA *managing*
+          # the vault resource in PCI.
+          #
+          # WHY THIS WAS URGENT: the operations stage runs before network-vpc, so
+          # this one stack failing blocked the entire pipeline and left
+          # shared-prod's public-a subnet and all five shared-prod RAM subnet
+          # shares un-restored - meaning Production could not create anything in
+          # shared-prod. Parking this is what unblocks that.
+          #
+          # TO UNPARK - do NOT just uncomment:
+          #   1. Get the existing vault under OperationsStack management via a
+          #      CloudFormation IMPORT change set using a management-account role,
+          #      OR delete the orphaned vault first - only safe if it holds no
+          #      recovery points, check with
+          #      `aws backup list-recovery-points-by-backup-vault
+          #         --backup-vault-name AWSAccelerator-BackupVault`.
+          #   2. Restore this line.
+          #   3. Expect a no-op or in-place update. If the plan shows the vault
+          #      being CREATED, STOP - the import did not take.
+          #
+          # Context: .kiro/journal/2026-09-09-lza-config-untracked-zip-upload-stripped-config.md
 
 # Logging Configurations
 logging:
