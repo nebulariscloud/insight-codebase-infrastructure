@@ -56,30 +56,36 @@ WHAT IS BLOCKING THE REBUILD
    empty. See docs/07-Operations/cti-v7-lza-exception.md. LZA change, delivered
    as a config zip upload (see .kiro/steering/lza-config-zip-delivery.md).
 
-3. Which public subnet to use is NOT yet settled. Do not just re-point tfvars.
-   A describe-subnets in the Network account on 2026-08-14 found BOTH
-   subnet-0919739a39165a934 (10.12.0.32/27) and subnet-0dc7b70d38275e775
-   (10.12.0.192/27) alive, in us-east-2a, carrying the IDENTICAL Name tag
-   `AWSAccelerator-us-east-2-shared-prod-public-a`.
+3. RESOLVED 2026-09-10 — the subnet question is settled and tfvars is corrected
+   (PR #97). public_subnet_id is now subnet-08ce7fb6c30eed107 (10.12.0.192/27),
+   recreated by the LZA pipeline on 2026-09-10 and verified visible from the
+   Production account via TerraformExecution — i.e. the RAM share is live.
 
-   The destroyed instance's private IP was 10.12.0.52, which sits inside
-   10.12.0.32/27 — i.e. it was running in the subnet tfvars already pins. So
-   that subnet was visible to Production on 2026-07-07 and not on 2026-08-08.
-   The likely fault is that it is no longer RAM-shared to Production, not that
-   it was deleted. Same symptom, different fix: re-share vs re-point.
+   For the record, the 2026-08-14 duplicate-Name mystery is explained. The
+   original subnet-0919739a39165a934 (10.12.0.32/27) held cti-v7 until
+   2026-08-08. LZA had recreated public-a as subnet-0dc7b70d38275e775, which
+   orphaned ...9165a934 — it survived only because cti-v7's ENI was still
+   attached — and dropped its RAM share to Production. That is why RunInstances
+   failed with InvalidSubnetID.NotFound: the ID was never stale, the SHARE was
+   gone.
 
-   Resolve with `describe-subnets` FROM PRODUCTION (395516496764) before
-   editing tfvars. If ...9165a934 is absent in Production but present in
-   Network, it is a sharing problem.
+   DO NOT USE EITHER OLD ID:
+     subnet-0919739a39165a934  empty orphan, retagged ORPHANED-do-not-use-*,
+                               not shared to Production. Cannot be deleted -
+                               ec2:DeleteSubnet is SCP-denied.
+     subnet-0dc7b70d38275e775  DELETED 2026-09-04 by the config-zip incident.
 
 WHAT IS ALREADY KNOWN GOOD
 ==========================
 - EIP 3.16.53.180 (eipalloc-02826934c621235e9) SURVIVED, unassociated. The
   Aheeva vendor allowlist for that IP is still valid, and no re-allocation is
   needed (ec2:AllocateAddress is SCP-denied without the exception).
-- subnet-0dc7b70d38275e775 has the required IGW default route
-  (0.0.0.0/0 -> igw-010871f4083a631af), so it IS Option-B-capable if item 3
-  resolves in favour of re-pointing.
+- subnet-08ce7fb6c30eed107 (the CURRENT public-a) is Option-B-capable, verified
+  2026-09-10: route table rtb-084d7813ef4ae10d8 carries 0.0.0.0/0 ->
+  igw-0e732e2a82da6dc5a and 10.0.0.0/8 -> tgw-0360ed77a03707835, 27 free IPs,
+  us-east-2a, MapPublicIpOnLaunch = False (correct - the EIP supplies the public
+  IP, not subnet auto-assign). Note the IGW id changed too; the old
+  igw-010871f4083a631af reference is stale.
 - AMI ami-0289fff8a491f450a (cti-v7-clean) is intact. The rebuild starts there.
 - The destroyed root volume is NOT recoverable: delete_on_termination was true
   and the leaf has no BackupPlan tag, so nothing is in the LZA backup vault.
@@ -88,8 +94,10 @@ WHAT IS ALREADY KNOWN GOOD
 TO UNPARK
 =========
 1. Get the Aheeva answer on hostid rebinding. Do not rebuild before this.
-2. Land the VPC BPA exclusion for whichever subnet item 3 selects.
-3. Settle the subnet question above; re-share or re-point tfvars accordingly.
+   THIS IS NOW THE ONLY LONG-LEAD BLOCKER.
+2. Land the VPC BPA exclusion for subnet-08ce7fb6c30eed107 specifically.
+3. DONE 2026-09-10 (PR #97) — tfvars points at subnet-08ce7fb6c30eed107 and the
+   RAM share to Production is verified live. Nothing further needed.
 4. Add a `BackupPlan = Continuous` tag to the leaf's tags block BEFORE the
    rebuild, so the hand-configuration lands in the LZA backup vault this time.
    Root volume is delete_on_termination = true and that is not changing.
