@@ -49,4 +49,17 @@ eice_security_group_id = "sg-0a990a87e6abca926"
 # this key or every PutObject server-side gets denied and s3fs returns
 # EPERM. Confirm with:
 #   aws s3api get-bucket-encryption --bucket amex-recordings-prod-395516496764 --region us-east-2
-amex_bucket_kms_key_arn = "arn:aws:kms:us-east-2:395516496764:key/adacb68f-a099-486c-bfce-56bb696ed126"
+#
+# Was adacb68f-a099-486c-bfce-56bb696ed126, which is not the key this bucket
+# uses. A PutObject from the instance was denied on
+# key/d6fdb2e8-3be3-4e00-8c6d-96abe2b8aa8a, so the grant sat on a key S3
+# never calls here. Same defect as the claro leaf (PR #98) - the ARN was
+# copied between leaves on the belief that adacb68f was the org-wide S3
+# default CMK. Both buckets in fact resolve to d6fdb2e8, which is consistent
+# with the S3.17 remediation document reading one key per region from SSM.
+#
+# Read the authoritative value rather than copying it from a sibling leaf
+# (see aws-accelerator-config/ssm-documents/enable-s3-bucket-kms-encryption.yaml):
+#   aws ssm get-parameter --name /accelerator/kms/AcceleratorS3DefaultKey/key-arn \
+#     --region us-east-2 --query Parameter.Value --output text
+amex_bucket_kms_key_arn = "arn:aws:kms:us-east-2:395516496764:key/d6fdb2e8-3be3-4e00-8c6d-96abe2b8aa8a"
