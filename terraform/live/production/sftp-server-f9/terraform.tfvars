@@ -62,9 +62,26 @@ eice_security_group_id = "sg-0a990a87e6abca926"
 
 # KMS key that will encrypt f9-recordings-prod-395516496764. The bucket leaf
 # creates it SSE-S3 (AES256), but the S3.17 Security Hub auto-remediation
-# flips org buckets to SSE-KMS with this org-wide customer-managed key -
-# same key already used by the amex-recordings and claro-recordings buckets.
-# Granting it up front avoids a later EPERM-at-close surprise from s3fs.
-# Confirm after the bucket exists with:
+# flips org buckets to SSE-KMS with the org-wide customer-managed key -
+# the same key already used by the amex-recordings and claro-recordings
+# buckets. Granting it up front avoids a later EPERM-at-close from s3fs.
+#
+# Was adacb68f-a099-486c-bfce-56bb696ed126. The intent above was right but
+# the literal was wrong: amex and claro both turned out to be encrypted with
+# key/d6fdb2e8-3be3-4e00-8c6d-96abe2b8aa8a, and both leaves were denied on
+# kms:GenerateDataKey until PR #98 (claro) and PR #99 (amex) corrected them.
+# adacb68f was never the org-wide S3 default CMK; it propagated by being
+# copied from one leaf's tfvars to the next.
+#
+# This leaf is pre-emptive - nothing is reported broken here yet - so it is
+# corrected now to keep the same failure from being discovered in production
+# a third time.
+#
+# Confirm once the bucket exists and remediation has run:
 #   aws s3api get-bucket-encryption --bucket f9-recordings-prod-395516496764 --region us-east-2
-f9_bucket_kms_key_arn = "arn:aws:kms:us-east-2:395516496764:key/adacb68f-a099-486c-bfce-56bb696ed126"
+# The authoritative per-region value is the SSM parameter the remediation
+# document itself reads (see
+# aws-accelerator-config/ssm-documents/enable-s3-bucket-kms-encryption.yaml):
+#   aws ssm get-parameter --name /accelerator/kms/AcceleratorS3DefaultKey/key-arn \
+#     --region us-east-2 --query Parameter.Value --output text
+f9_bucket_kms_key_arn = "arn:aws:kms:us-east-2:395516496764:key/d6fdb2e8-3be3-4e00-8c6d-96abe2b8aa8a"
