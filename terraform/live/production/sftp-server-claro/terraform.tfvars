@@ -49,6 +49,19 @@ eice_security_group_id = "sg-0a990a87e6abca926"
 # needs kms:GenerateDataKey/Decrypt on this key or every PutObject
 # server-side gets denied and s3fs returns EPERM. Confirm with:
 #   aws s3api get-bucket-encryption --bucket claro-recordings-prod-395516496764 --region us-east-2
-# Same key as the amex-recordings bucket - "Default customer-managed KMS
-# key for org-wide S3 bucket encryption".
-claro_bucket_kms_key_arn = "arn:aws:kms:us-east-2:395516496764:key/adacb68f-a099-486c-bfce-56bb696ed126"
+#
+# Was adacb68f-a099-486c-bfce-56bb696ed126 (copied from the amex-recordings
+# leaf on the assumption it was the single org-wide S3 default CMK). That is
+# the wrong key for this bucket: a PutObject from the instance was denied on
+# key/d6fdb2e8-3be3-4e00-8c6d-96abe2b8aa8a, so the grant was landing on a key
+# S3 never calls for this bucket. The identity policy allowed the action, just
+# not on the resource being used, so it read as a plain permissions gap.
+#
+# The S3.17 remediation document resolves its key from the SSM parameter
+# /accelerator/kms/AcceleratorS3DefaultKey/key-arn (see
+# aws-accelerator-config/ssm-documents/enable-s3-bucket-kms-encryption.yaml),
+# which is per-region and authoritative. Read it back rather than copying an
+# ARN between leaves:
+#   aws ssm get-parameter --name /accelerator/kms/AcceleratorS3DefaultKey/key-arn \
+#     --region us-east-2 --query Parameter.Value --output text
+claro_bucket_kms_key_arn = "arn:aws:kms:us-east-2:395516496764:key/d6fdb2e8-3be3-4e00-8c6d-96abe2b8aa8a"
