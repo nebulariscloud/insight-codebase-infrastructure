@@ -53,7 +53,7 @@ resource "aws_instance" "this" {
   ebs_optimized               = var.ebs_optimized
   monitoring                  = var.monitoring
   disable_api_termination     = var.disable_api_termination
-  associate_public_ip_address = false
+  associate_public_ip_address = false # launch-time only - see ignore_changes below
 
   metadata_options {
     http_endpoint               = "enabled"
@@ -82,6 +82,32 @@ resource "aws_instance" "this" {
       # here - manage AMI rotation explicitly when you intend to.
       ami,
       user_data,
+
+      # DO NOT REMOVE. This destroyed a production instance on 2026-08-08.
+      #
+      # `associate_public_ip_address` is set to false above as a LAUNCH-TIME
+      # instruction ("don't auto-assign a public IP from the subnet"). But the
+      # provider reads it back as a STEADY-STATE fact: any instance that has a
+      # public IP for any reason refreshes as `true`. Attaching an EIP - which
+      # this very module does when allocate_eip = true - is exactly such a
+      # reason.
+      #
+      # The attribute forces replacement. So without this line, every instance
+      # with an EIP permanently plans as `true -> false # forces replacement`,
+      # on every plan, forever. It looks like a no-op leaf right up until
+      # something runs an apply.
+      #
+      # That is what happened to cti-v7. The EIP was attached 2026-07-07; the
+      # leaf silently carried a forced replacement for a month; WAF PR #59
+      # touched terraform/modules/**, which fans out an apply to every leaf,
+      # and the queued replacement executed. i-04dc1a79b8277f654 was destroyed
+      # with delete_on_termination = true on its root volume and no backup.
+      # Full postmortem:
+      #   .kiro/journal/2026-08-08-cti-v7-destroyed-by-module-fanout.md
+      #
+      # Ignoring it is safe: the value above still applies at creation, and
+      # nothing here should ever be toggling auto-assign on a live instance.
+      associate_public_ip_address,
     ]
   }
 }

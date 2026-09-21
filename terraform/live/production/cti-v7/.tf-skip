@@ -1,15 +1,10 @@
-Parked 2026-08-10: instance destroyed, public_subnet_id stale, rebuild blocked on Aheeva license hostid + missing VPC BPA exclusion.
+Parked 2026-08-10: instance destroyed 2026-08-08. Rebuild blocked on Aheeva license hostid + missing VPC BPA exclusion + unresolved public_subnet_id sharing question.
 
 WHY THIS LEAF IS PARKED
 =======================
-
 On 2026-08-08 the CI fan-out apply for WAF PR #59 destroyed this leaf's EC2
-instance (i-04dc1a79b8277f654). The leaf carried pre-existing drift — an
-ami_id updated in tfvars but never applied — so Terraform planned a
-replacement. The destroy succeeded; the create then failed because
-public_subnet_id points at subnet-0919739a39165a934, which no longer exists.
-
-Since then every module-level PR fans out to this leaf and fails with:
+instance (i-04dc1a79b8277f654). Since then the leaf fails on every module-level
+PR with:
 
   Error: creating EC2 Instance: ... InvalidSubnetID.NotFound:
   The subnet ID 'subnet-0919739a39165a934' does not exist
@@ -19,29 +14,78 @@ create) but it turns every subsequent module PR red. A permanently-red pipeline
 trains people to ignore failures, which is how the original destruction went
 unnoticed. So the leaf is parked rather than left failing.
 
+Parking is CI-only. It does not touch state or any AWS resource. `detect` skips
+any leaf containing this file; delete the file and the leaf is live again.
+
+ROOT CAUSE — CORRECTED 2026-09-08
+=================================
+Earlier revisions of this file blamed "an ami_id updated in tfvars but never
+applied". That was wrong: the module carries `ignore_changes = [ami]`, so an
+AMI diff cannot force replacement. The stale subnet was also not the cause.
+
+The retained plan log (run 31279439349, job 93158288989) has exactly ONE line
+marked `# forces replacement`:
+
+  ~ associate_public_ip_address = true -> false # forces replacement
+
+The ec2-migrated module set `associate_public_ip_address = false` as a
+launch-time instruction, but the provider reads it back as a steady-state fact.
+Once EIP 3.16.53.180 was attached on 2026-07-07, the instance refreshed as
+`true`, and the attribute forces replacement — so this leaf silently carried a
+queued destroy+create for a month. PR #59 touched terraform/modules/**, the
+fan-out applied every leaf, and the queued replacement executed.
+
+There were therefore TWO independent faults:
+  1. associate_public_ip_address  -> why the instance was DESTROYED.
+  2. InvalidSubnetID.NotFound     -> why the recreate FAILED.
+
+Fault 1 is fixed: `associate_public_ip_address` is now in the module's
+`ignore_changes` list. Do not remove it. Fault 2 is still open (below).
+
+Full postmortem: .kiro/journal/2026-08-08-cti-v7-destroyed-by-module-fanout.md
+
 WHAT IS BLOCKING THE REBUILD
 ============================
-
-Two things, neither of them code:
-
 1. Aheeva license hostid. The in-flight license reissue was keyed to hostid
    02417393bdd5, which died with the instance. A rebuilt instance gets a new
    hostid. Aheeva has to confirm they can rebind before we burn another one.
+   This is the long-lead item — it gates everything else.
 
 2. VPC Block Public Access exclusion. Option B needs one for the public subnet,
    and `describe-vpc-block-public-access-exclusions` in Production returns
-   empty — the original exclusion presumably died with the original subnet.
-   See docs/07-Operations/cti-v7-lza-exception.md.
+   empty. See docs/07-Operations/cti-v7-lza-exception.md. LZA change, delivered
+   as a config zip upload (see .kiro/steering/lza-config-zip-delivery.md).
+
+3. RESOLVED 2026-09-10 — the subnet question is settled and tfvars is corrected
+   (PR #97). public_subnet_id is now subnet-08ce7fb6c30eed107 (10.12.0.192/27),
+   recreated by the LZA pipeline on 2026-09-10 and verified visible from the
+   Production account via TerraformExecution — i.e. the RAM share is live.
+
+   For the record, the 2026-08-14 duplicate-Name mystery is explained. The
+   original subnet-0919739a39165a934 (10.12.0.32/27) held cti-v7 until
+   2026-08-08. LZA had recreated public-a as subnet-0dc7b70d38275e775, which
+   orphaned ...9165a934 — it survived only because cti-v7's ENI was still
+   attached — and dropped its RAM share to Production. That is why RunInstances
+   failed with InvalidSubnetID.NotFound: the ID was never stale, the SHARE was
+   gone.
+
+   DO NOT USE EITHER OLD ID:
+     subnet-0919739a39165a934  empty orphan, retagged ORPHANED-do-not-use-*,
+                               not shared to Production. Cannot be deleted -
+                               ec2:DeleteSubnet is SCP-denied.
+     subnet-0dc7b70d38275e775  DELETED 2026-09-04 by the config-zip incident.
 
 WHAT IS ALREADY KNOWN GOOD
 ==========================
-
 - EIP 3.16.53.180 (eipalloc-02826934c621235e9) SURVIVED, unassociated. The
   Aheeva vendor allowlist for that IP is still valid, and no re-allocation is
   needed (ec2:AllocateAddress is SCP-denied without the exception).
-- Correct public subnet is subnet-0dc7b70d38275e775 (10.12.0.192/27,
-  us-east-2a) and it DOES have the required IGW default route
-  (0.0.0.0/0 -> igw-010871f4083a631af).
+- subnet-08ce7fb6c30eed107 (the CURRENT public-a) is Option-B-capable, verified
+  2026-09-10: route table rtb-084d7813ef4ae10d8 carries 0.0.0.0/0 ->
+  igw-0e732e2a82da6dc5a and 10.0.0.0/8 -> tgw-0360ed77a03707835, 27 free IPs,
+  us-east-2a, MapPublicIpOnLaunch = False (correct - the EIP supplies the public
+  IP, not subnet auto-assign). Note the IGW id changed too; the old
+  igw-010871f4083a631af reference is stale.
 - AMI ami-0289fff8a491f450a (cti-v7-clean) is intact. The rebuild starts there.
 - The destroyed root volume is NOT recoverable: delete_on_termination was true
   and the leaf has no BackupPlan tag, so nothing is in the LZA backup vault.
@@ -49,12 +93,21 @@ WHAT IS ALREADY KNOWN GOOD
 
 TO UNPARK
 =========
-
-1. Get the Aheeva answer on hostid rebinding.
-2. Land the VPC BPA exclusion for subnet-0dc7b70d38275e775.
-3. Update public_subnet_id in terraform.tfvars to subnet-0dc7b70d38275e775.
-4. Delete this file.
-5. Open a PR for the leaf. Expect a CREATE, not a replacement — there is no
-   instance in state. Re-associate the surviving EIP.
-
-Full history: .kiro/journal/2026-08-08-cti-v7-destroyed-by-module-fanout.md
+1. Get the Aheeva answer on hostid rebinding. Do not rebuild before this.
+   THIS IS NOW THE ONLY LONG-LEAD BLOCKER.
+2. Land the VPC BPA exclusion for subnet-08ce7fb6c30eed107 specifically.
+3. DONE 2026-09-10 (PR #97) — tfvars points at subnet-08ce7fb6c30eed107 and the
+   RAM share to Production is verified live. Nothing further needed.
+4. Add a `BackupPlan = Continuous` tag to the leaf's tags block BEFORE the
+   rebuild, so the hand-configuration lands in the LZA backup vault this time.
+   Root volume is delete_on_termination = true and that is not changing.
+5. Confirm the module still has `associate_public_ip_address` in its
+   `ignore_changes` list. If it does not, STOP — re-adding it is a
+   prerequisite, or the rebuilt instance will be destroyed on the next apply
+   exactly as it was on 2026-08-08.
+6. Delete this file.
+7. Open a PR for the leaf. Expect a CREATE, not a replacement — there is no
+   instance in state. If the plan shows any destroy or replace, stop and work
+   out why; do not add ALLOW-DESTROY to get past it.
+8. Re-associate the surviving EIP, then redo the sip.conf externip work and the
+   RLM license bring-up per docs/07-Operations/cti-v7-wave2-runbook.md Part 7.
