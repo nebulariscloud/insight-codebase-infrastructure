@@ -76,7 +76,10 @@
           ]
         },
         "StringNotEquals": {
-          "aws:RequestTag/Migrated": "CTIv7"
+          "aws:RequestTag/Migrated": [
+            "CTIv7",
+            "AheevaCTIV86"
+          ]
         }
       }
     },
@@ -96,7 +99,10 @@
           ]
         },
         "StringNotEquals": {
-          "aws:ResourceTag/Migrated": "CTIv7"
+          "aws:ResourceTag/Migrated": [
+            "CTIv7",
+            "AheevaCTIV86"
+          ]
         }
       }
     },
