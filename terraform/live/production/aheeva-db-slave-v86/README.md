@@ -136,8 +136,26 @@ cutover.
 - **`db_client_cidrs` and `admin_ssh_cidrs` are APPEND-ONLY.** The module keys
   security-group rules by list index, so inserting renumbers every later rule
   into a destroy+create, which the CI destroy guard blocks on merge. Admin SSH
-  is deliberately ordered first because the DB client list is the one expected
-  to grow.
+  is ordered first because the DB client list is the one expected to grow —
+  appending to `db_client_cidrs` is therefore free.
+
+  **But adding the first `admin_ssh_cidrs` entry is NOT free.** With the list
+  empty today, the DB rule sits at index 0 and its key is
+  `"3306-3306-tcp-0"`. Adding one admin SSH CIDR puts it at index 0 and shifts
+  the DB rule to `"3306-3306-tcp-1"` — a destroy+create, which the guard will
+  block.
+
+  That is safe to authorise: recreating a security-group rule is a
+  sub-second operation on a replica nothing depends on yet. When it happens,
+  **first confirm the plan replaces only security-group rules and never the
+  instance**, then add to the PR description:
+
+  ```
+  ALLOW-DESTROY: terraform/live/production/aheeva-db-slave-v86
+  ```
+
+  If the plan shows `aws_instance.this` being replaced, something else is wrong
+  — stop and find out what.
 - **The module only honours `cidr_blocks[0]`** per rule, so the leaf flattens
   one rule object per CIDR.
 - **`additional_ebs_volumes` is deliberately empty.** The AMI declares both
