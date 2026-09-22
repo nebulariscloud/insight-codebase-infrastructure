@@ -1,0 +1,5 @@
+# Same rationale as crm-alb: this leaf's terraform.tfvars contains only public
+# AWS resource IDs, the backend private IPs, and the hostname. All safe to
+# commit. Override the parent terraform/.gitignore so CI can read it via
+# -var-file=terraform.tfvars.
+!terraform.tfvars
