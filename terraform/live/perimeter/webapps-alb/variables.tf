@@ -122,16 +122,47 @@ variable "health_check_matcher" {
 variable "php73_path_groups" {
   description = <<-EOT
     Groups of URI path patterns routed to the webapps-php73 box. Each group
-    becomes one ALB listener rule (max 5 patterns per rule). Order determines
-    rule priority. Reproduces the source WebappsALB abbvieTG rules verbatim.
+    becomes one ALB listener rule. Order determines rule priority. Reproduces
+    the source WebappsALB abbvieTG rules verbatim.
+
+    Two ALB limits apply PER RULE and both are respected here:
+      - at most 5 path-pattern values, AND
+      - at most 6 wildcard characters (*/?) across all values in the rule.
+
+    The second limit is the one that bit us on 2026-09-22: a group of 5 values
+    that included both /ssspq*/* and /sss_agencias_*/* (2 wildcards each) came
+    to 7 wildcards and CreateRule failed with "A rule can only have '6'
+    condition wildcards". The two double-wildcard patterns are now split into a
+    group whose total stays <= 6.
   EOT
   type        = list(list(string))
   default = [
+    # 5 wildcards
     ["/island/*", "/webhook/*", "/abbvie_aheeva/*", "/ah_amex/*", "/AAA-BI/*"],
+    # 5 wildcards
     ["/AAA_Survey/*", "/sss_holiday/*", "/aaa_aheeva_survey_reports/*", "/electric/*", "/testing/*"],
-    ["/testing_admin/*", "/testing2/*", "/ssspq*/*", "/sss_agencias_*/*", "/clarocrm/*"],
-    ["/aaa_referidos/*", "/ehret/*", "/aeronet/*"],
+    # 5 wildcards
+    ["/testing_admin/*", "/testing2/*", "/clarocrm/*", "/aaa_referidos/*", "/ehret/*"],
+    # 5 wildcards: /aeronet/* (1) + /ssspq*/* (2) + /sss_agencias_*/* (2)
+    ["/aeronet/*", "/ssspq*/*", "/sss_agencias_*/*"],
   ]
+
+  validation {
+    condition = alltrue([
+      for g in var.php73_path_groups : length(g) <= 5
+    ])
+    error_message = "Each path group maps to one ALB rule, which allows at most 5 path-pattern values."
+  }
+
+  validation {
+    # length(join(...)) counts wildcard chars without sum(), which errors on an
+    # empty list. join yields "" for an empty group, length 0.
+    condition = alltrue([
+      for g in var.php73_path_groups :
+      length(regexall("[*?]", join("", g))) <= 6
+    ])
+    error_message = "Each path group maps to one ALB rule, which allows at most 6 wildcard characters (*/?) across its values."
+  }
 }
 
 # ----------------------------------------------------------------------------
