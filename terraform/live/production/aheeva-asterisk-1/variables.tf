@@ -122,30 +122,22 @@ variable "voice_source_cidrs" {
     actually in use at the voice cutover.
   EOT
   type        = list(string)
+  # SUMMARIZED to supernets, not the 19 individual VPN routes. The voice ports
+  # multiply CIDRs x ports, and 19 CIDRs blew past the 60-rules-per-SG limit
+  # (RulesPerSecurityGroupLimitExceeded, 2026-09-23). These 5 supernets cover
+  # every on-prem range routed in network-config.yaml's tgw-rt-spoke:
+  #   172.16.10.0/24   Liberty
+  #   172.26.0.0/15    Kennedy 172.26.4/22 + all 172.27.x
+  #   172.20.0.0/21    RD 172.20.0-4/24
+  #   192.168.0.0/16   Kennedy 192.168.x
+  #   100.64.0.0/20    all three CGNAT source-NAT ranges (RD/Kennedy/Zima)
+  # Tighten to exact ranges at the voice cutover if a narrower scope is wanted.
   default = [
-    # Liberty (Worldnet)
     "172.16.10.0/24",
-    # Kennedy (Worldnet)
-    "172.27.150.0/27",
-    "172.27.100.0/24",
-    "172.27.50.0/25",
-    "172.27.75.0/24",
-    "172.27.200.0/24",
-    "172.27.220.0/24",
-    "172.26.4.0/22",
-    "192.168.100.0/24",
-    "192.168.20.128/29",
-    "192.168.70.0/26",
-    "100.64.4.0/22",
-    # RD (Altice)
-    "172.20.0.0/24",
-    "172.20.1.0/24",
-    "172.20.2.0/24",
-    "172.20.3.0/24",
-    "172.20.4.0/24",
-    "100.64.0.0/22",
-    # Zima (Tigo)
-    "100.64.8.0/22",
+    "172.26.0.0/15",
+    "172.20.0.0/21",
+    "192.168.0.0/16",
+    "100.64.0.0/20",
   ]
 }
 
