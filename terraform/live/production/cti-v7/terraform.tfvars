@@ -19,8 +19,23 @@ instance_type = "m5.2xlarge"
 ami_id = "ami-0289fff8a491f450a"
 
 # shared-prod VPC + the public subnet created by the Option B exception.
+#
+# public_subnet_id updated 2026-09-22 at un-park. History, because this ID has
+# moved twice and the old values are traps:
+#   subnet-0919739a39165a934  10.12.0.32/27   the ORIGINAL. cti-v7 ran here until
+#                                             2026-08-08. LZA later recreated
+#                                             public-a, orphaning this one and
+#                                             dropping its RAM share to Production
+#                                             - which is why RunInstances failed
+#                                             with InvalidSubnetID.NotFound. Now
+#                                             retagged ORPHANED-do-not-use-*.
+#   subnet-0dc7b70d38275e775  10.12.0.192/27  the replacement. DELETED 2026-09-04
+#                                             by the config-zip incident.
+#   subnet-08ce7fb6c30eed107  10.12.0.192/27  CURRENT. Recreated 2026-09-10 and
+#                                             verified shared to Production; VPC
+#                                             BPA exclusion in place (2026-09-22).
 vpc_id           = "vpc-04a8720d0ddb40713"
-public_subnet_id = "subnet-0919739a39165a934"
+public_subnet_id = "subnet-08ce7fb6c30eed107"
 
 root_volume_size_gib = 200
 
