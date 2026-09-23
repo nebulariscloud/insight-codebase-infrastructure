@@ -12,9 +12,12 @@ region       = "us-east-2"
 name          = "aheeva-asterisk-1"
 instance_type = "m5.2xlarge"
 
-# Copied + re-encrypted into us-east-2 with the LZA EBS key from source
-# ami-04d6fc0e10b93c923 (snap-0259a6a62197264cb). Source root unencrypted.
-ami_id = "ami-0274ba6e2706ba77f"
+# Clean AMI built via the source-tenant dd-sever (the source AMI carried
+# marketplace product code cvugziknvmxgqna9noibqnnsy which copy-image inherits
+# and RunInstances refuses with OptInRequired). Registered 2026-09-23 from clean
+# snapshot snap-0de2f1d00191f8438; ProductCodes null, verified.
+# See docs/07-Operations/aheeva-cluster-dd-migration-runbook.md.
+ami_id = "ami-080a19cb3674dbd4d"
 
 # shared-prod VPC + app-a subnet (private).
 #   vpc-04a8720d0ddb40713     = AWSAccelerator-us-east-2-shared-prod

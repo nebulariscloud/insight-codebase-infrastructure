@@ -12,9 +12,11 @@ region       = "us-east-2"
 name          = "aheeva-db-2"
 instance_type = "m5.2xlarge"
 
-# Copied + re-encrypted into us-east-2 with the LZA EBS key from source
-# ami-004bccf2a71b935b7 (snap-0640eca43f033a7f0). Source root unencrypted.
-ami_id = "ami-0e9935fdf0e684a41"
+# Clean AMI built via the source-tenant dd-sever (source carried marketplace
+# product code cvugziknvmxgqna9noibqnnsy -> OptInRequired on copy-image).
+# Registered 2026-09-23 from clean snapshot snap-0952cf2a1636073a8;
+# ProductCodes null, verified. See aheeva-cluster-dd-migration-runbook.md.
+ami_id = "ami-01378200f8672c0a4"
 
 vpc_id    = "vpc-04a8720d0ddb40713"
 subnet_id = "subnet-00d31cac6422417c4"
