@@ -110,26 +110,17 @@ variable "voice_source_cidrs" {
     at the voice cutover; set to [] if this DB box serves no voice.
   EOT
   type        = list(string)
+  # SUMMARIZED to supernets, not the 19 individual VPN routes, to stay under the
+  # 60-rules-per-SG limit (see the aheeva-asterisk-1 leaf). These 5 cover every
+  # tgw-rt-spoke on-prem range: 172.16.10.0/24 (Liberty), 172.26.0.0/15
+  # (Kennedy 172.26/27.x), 172.20.0.0/21 (RD), 192.168.0.0/16 (Kennedy),
+  # 100.64.0.0/20 (all CGNAT). Set to [] if this DB box serves no voice.
   default = [
     "172.16.10.0/24",
-    "172.27.150.0/27",
-    "172.27.100.0/24",
-    "172.27.50.0/25",
-    "172.27.75.0/24",
-    "172.27.200.0/24",
-    "172.27.220.0/24",
-    "172.26.4.0/22",
-    "192.168.100.0/24",
-    "192.168.20.128/29",
-    "192.168.70.0/26",
-    "100.64.4.0/22",
-    "172.20.0.0/24",
-    "172.20.1.0/24",
-    "172.20.2.0/24",
-    "172.20.3.0/24",
-    "172.20.4.0/24",
-    "100.64.0.0/22",
-    "100.64.8.0/22",
+    "172.26.0.0/15",
+    "172.20.0.0/21",
+    "192.168.0.0/16",
+    "100.64.0.0/20",
   ]
 }
 
