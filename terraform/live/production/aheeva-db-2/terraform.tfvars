@@ -12,8 +12,9 @@ region       = "us-east-2"
 name          = "aheeva-db-2"
 instance_type = "m5.2xlarge"
 
-# Copied + re-encrypted into us-east-2 with the LZA EBS key. Fill after copy.
-ami_id = "ami-XXXXXXXXXXXXXXXXX"
+# Copied + re-encrypted into us-east-2 with the LZA EBS key from source
+# ami-004bccf2a71b935b7 (snap-0640eca43f033a7f0). Source root unencrypted.
+ami_id = "ami-0e9935fdf0e684a41"
 
 vpc_id    = "vpc-04a8720d0ddb40713"
 subnet_id = "subnet-00d31cac6422417c4"

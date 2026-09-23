@@ -12,8 +12,9 @@ region       = "us-east-2"
 name          = "aheeva-asterisk-1"
 instance_type = "m5.2xlarge"
 
-# Copied + re-encrypted into us-east-2 with the LZA EBS key. Fill after copy.
-ami_id = "ami-XXXXXXXXXXXXXXXXX"
+# Copied + re-encrypted into us-east-2 with the LZA EBS key from source
+# ami-04d6fc0e10b93c923 (snap-0259a6a62197264cb). Source root unencrypted.
+ami_id = "ami-0274ba6e2706ba77f"
 
 # shared-prod VPC + app-a subnet (private).
 #   vpc-04a8720d0ddb40713     = AWSAccelerator-us-east-2-shared-prod
