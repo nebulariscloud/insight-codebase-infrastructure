@@ -4,4 +4,4 @@
 
 # account_name = "PCI"
 # account_id   = ""   # leave empty to read /accelerator/organization/account-ids/PCI from SSM
-                      # or set explicitly: account_id = "247514667218"
+# or set explicitly: account_id = "247514667218"
