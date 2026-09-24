@@ -1,0 +1,8 @@
+# Un-ignore terraform.tfvars so CI has deterministic values (project-wide pattern).
+!terraform.tfvars
+
+# Standard Terraform local state and cache — never commit these.
+.terraform/
+.terraform.lock.hcl
+terraform.tfstate
+terraform.tfstate.backup
