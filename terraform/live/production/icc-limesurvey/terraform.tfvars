@@ -12,8 +12,10 @@ region       = "us-east-2"
 name          = "icc-limesurvey"
 instance_type = "t3.small"
 
-# Copied + re-encrypted into us-east-2 with the LZA EBS key. Fill after copy.
-ami_id = "ami-XXXXXXXXXXXXXXXXX"
+# Copied + re-encrypted into us-east-2 with the LZA EBS key from source
+# ami-09cdbe7e8664d5a46 (snap-01bd2b7df9e633a5e). Source unencrypted, no
+# marketplace product code — plain copy-image, 2026-09-23.
+ami_id = "ami-06840d25820d0a859"
 
 # shared-prod VPC + app-a subnet (private).
 #   vpc-04a8720d0ddb40713     = AWSAccelerator-us-east-2-shared-prod
