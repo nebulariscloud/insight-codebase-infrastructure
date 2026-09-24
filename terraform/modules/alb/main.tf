@@ -24,8 +24,14 @@ resource "aws_vpc_security_group_ingress_rule" "http" {
   description       = "HTTP from ${each.value}"
 }
 
+# The :443 ingress rules are gated on open_https_ingress (default true, so this
+# is a no-op for every existing caller). Set it false on an HTTP-only ALB with a
+# large ingress_cidrs allowlist: opening both 80 and 443 for N CIDRs is 2N SG
+# rules and can blow past the 60-rules-per-SG limit
+# (RulesPerSecurityGroupLimitExceeded). With no HTTPS listener yet, the :443
+# rules serve no traffic anyway. Flip back to true when a cert is added.
 resource "aws_vpc_security_group_ingress_rule" "https" {
-  for_each          = toset(var.ingress_cidrs)
+  for_each          = var.open_https_ingress ? toset(var.ingress_cidrs) : toset([])
   security_group_id = aws_security_group.alb.id
   cidr_ipv4         = each.value
   from_port         = 443

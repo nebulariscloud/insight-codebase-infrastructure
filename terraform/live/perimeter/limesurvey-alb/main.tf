@@ -47,6 +47,12 @@ module "alb" {
   scheme        = "internet-facing"
   ingress_cidrs = var.allowed_source_cidrs
 
+  # HTTP-only interim + a ~33-CIDR partner allowlist = 66 SG rules if both
+  # ports open, over the 60-per-SG limit (RulesPerSecurityGroupLimitExceeded,
+  # hit 2026-09-24). No HTTPS listener yet, so skip the :443 ingress rules —
+  # halves the count to ~33. Flip back to true (remove this) when a cert lands.
+  open_https_ingress = false
+
   # LimeSurvey speaks plain HTTP on the instance; the ALB terminates client
   # traffic. No cert yet -> HTTP listener forwards (see the header note).
   target_port     = var.backend_port
