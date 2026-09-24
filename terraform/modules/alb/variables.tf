@@ -43,6 +43,20 @@ variable "egress_cidrs" {
   default     = ["10.0.0.0/8"]
 }
 
+variable "open_https_ingress" {
+  description = <<-EOT
+    Whether to open :443 inbound for each entry in ingress_cidrs.
+
+    Default true — every existing caller keeps both :80 and :443 open, so this
+    is a no-op for them. Set false on an HTTP-only ALB (no cert yet) with a
+    large allowlist: opening both ports for N CIDRs is 2N SG rules and can
+    exceed the 60-rules-per-SG limit. With no HTTPS listener the :443 rules
+    carry no traffic anyway. Flip back to true when the cert is added.
+  EOT
+  type        = bool
+  default     = true
+}
+
 variable "target_port" {
   description = "Backend port the targets listen on."
   type        = number
